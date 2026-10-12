@@ -1,0 +1,31 @@
+{
+  "name": "smart-parking-thesis",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Monorepo for an IoT-ready smart parking system with realtime web foundation.",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c cyan,green \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm run dev --workspace apps/api",
+    "dev:web": "npm run dev --workspace apps/web",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run test --workspace apps/api",
+    "db:generate": "npm run db:generate --workspace apps/api",
+    "db:migrate": "npm run db:migrate --workspace apps/api",
+    "db:seed": "npm run db:seed --workspace apps/api",
+    "db:migrate:dev": "npm run db:migrate:dev --workspace apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "prettier": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module"
+}

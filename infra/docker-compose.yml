@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smart-parking-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smart_parking
+      POSTGRES_USER: smart_parking
+      POSTGRES_PASSWORD: smart_parking_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - smart_parking_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_parking -d smart_parking"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  smart_parking_pgdata:

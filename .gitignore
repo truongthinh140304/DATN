@@ -1,0 +1,26 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+
+# Local databases and generated media
+*.sqlite
+*.db
+data/
+uploads/
+recordings/
+videos/
+models/
+*.pt
+*.onnx
+*.engine
+
+# Tool caches
+.turbo/
+.vite/
+.prisma/client/
