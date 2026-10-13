@@ -10,6 +10,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(20),
   JWT_ACCESS_EXPIRES_IN: z.string().default("1d"),
+  VISION_API_KEY: z.string().min(20).default("change_me_vision_service_key"),
 });
 
 export const env = schema.parse(process.env);

@@ -19,6 +19,15 @@ models/
 *.pt
 *.onnx
 *.engine
+*.py[cod]
+**/__pycache__/
+.venv/
+**/.venv/
+.pytest_cache/
+services/vision/config/vision.json
+services/vision/config/spots.json
+services/vision/config/parking_rois.json
+services/vision/output/
 
 # Tool caches
 .turbo/

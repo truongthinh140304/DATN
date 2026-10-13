@@ -39,6 +39,12 @@ enum SessionStatus {
   COMPLETED
 }
 
+enum OccupancyStatus {
+  EMPTY
+  OCCUPIED
+  UNKNOWN
+}
+
 model User {
   id           String    @id @default(uuid()) @db.Uuid
   email        String    @unique
@@ -121,11 +127,29 @@ model ParkingSpot {
   area      ParkingArea   @relation(fields: [areaId], references: [id], onDelete: Cascade)
   reservations Reservation[]
   sessions  ParkingSession[]
+  cameraObservations CameraObservation[]
 
   @@unique([areaId, code])
   @@index([areaId])
   @@index([status])
   @@map("parking_spots")
+}
+
+model CameraObservation {
+  id              String          @id @default(uuid()) @db.Uuid
+  cameraId        String          @map("camera_id")
+  spotId          String          @map("spot_id") @db.Uuid
+  occupancyStatus OccupancyStatus @map("occupancy_status")
+  confidence      Float
+  observedAt      DateTime        @map("observed_at")
+  receivedAt      DateTime        @default(now()) @map("received_at")
+  metadata        Json?
+
+  spot            ParkingSpot     @relation(fields: [spotId], references: [id], onDelete: Cascade)
+
+  @@index([cameraId, observedAt])
+  @@index([spotId, observedAt])
+  @@map("camera_observations")
 }
 
 model Reservation {

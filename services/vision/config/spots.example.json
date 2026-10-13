@@ -1,0 +1,10 @@
+{
+  "cameraId": "parking-camera-01",
+  "spots": [
+    { "code": "A01", "spotId": "replace-with-database-uuid-a01" },
+    { "code": "A02", "spotId": "replace-with-database-uuid-a02" },
+    { "code": "A03", "spotId": "replace-with-database-uuid-a03" },
+    { "code": "A04", "spotId": "replace-with-database-uuid-a04" },
+    { "code": "A05", "spotId": "replace-with-database-uuid-a05" }
+  ]
+}

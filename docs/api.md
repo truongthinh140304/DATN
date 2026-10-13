@@ -73,3 +73,33 @@ Body check-in:
   "notes": "optional"
 }
 ```
+
+## Camera observations
+
+### Gửi từ Vision Service
+
+`POST /api/vision/observations` dùng header `x-vision-api-key`, không dùng tài khoản người dùng. Khóa phải trùng `VISION_API_KEY` của API.
+
+```json
+{
+  "observations": [
+    {
+      "cameraId": "parking-camera-01",
+      "spotId": "uuid",
+      "occupancyStatus": "OCCUPIED",
+      "confidence": 0.88,
+      "timestamp": "2026-10-13T10:30:00.000Z",
+      "metadata": { "detector": "yolo11n.pt", "device": "cpu" }
+    }
+  ]
+}
+```
+
+API trả `202 { "accepted": 1 }`. Batch nhận tối đa 50 quan sát. Endpoint chỉ lưu lịch sử camera, không thay đổi `parking_spots.status`.
+
+### Đọc quan sát
+
+Cần JWT hợp lệ:
+
+- `GET /api/vision/observations?page=1&pageSize=20&cameraId=...&spotId=...&occupancyStatus=OCCUPIED`
+- `GET /api/vision/observations/latest?cameraId=parking-camera-01`

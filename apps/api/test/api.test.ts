@@ -9,6 +9,9 @@ const runDbTests =
 const testEmails = ["user-test@example.com", "admin-test@example.com"];
 
 async function cleanupTestData() {
+  await prisma.cameraObservation.deleteMany({
+    where: { cameraId: "test-camera" },
+  });
   await prisma.auditLog.deleteMany({
     where: { actor: { email: { in: testEmails } } },
   });
@@ -97,6 +100,33 @@ runDbTests("smart parking API", () => {
       .send({ areaId: area.body.area.id, code: "B01" });
     expect(spot.status).toBe(201);
     spotId = spot.body.spot.id;
+  });
+
+  it("authenticates and stores camera observations without changing spot status", async () => {
+    const observation = {
+      cameraId: "test-camera",
+      spotId,
+      occupancyStatus: "OCCUPIED",
+      confidence: 0.91,
+      timestamp: new Date().toISOString(),
+    };
+
+    const unauthorized = await request(app)
+      .post("/api/vision/observations")
+      .send(observation);
+    expect(unauthorized.status).toBe(401);
+
+    const accepted = await request(app)
+      .post("/api/vision/observations")
+      .set("x-vision-api-key", "change_me_vision_service_key")
+      .send(observation);
+    expect(accepted.status).toBe(202);
+    expect(accepted.body.accepted).toBe(1);
+
+    const spot = await prisma.parkingSpot.findUniqueOrThrow({
+      where: { id: spotId },
+    });
+    expect(spot.status).toBe("AVAILABLE");
   });
 
   it("prevents two valid reservations on the same spot", async () => {

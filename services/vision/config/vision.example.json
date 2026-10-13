@@ -1,0 +1,12 @@
+{
+  "cameraId": "parking-camera-01",
+  "source": 0,
+  "roiConfig": "parking_rois.json",
+  "model": "yolo11n.pt",
+  "device": "cpu",
+  "imageSize": 640,
+  "detectorConfidence": 0.15,
+  "reportIntervalSeconds": 2,
+  "apiUrl": "http://localhost:4000",
+  "apiKey": ""
+}
