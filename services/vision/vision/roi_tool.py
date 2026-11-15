@@ -15,7 +15,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Draw normalized parking polygons on a camera/video frame"
     )
     parser.add_argument("--source", default="0", help="Webcam index, MP4 or RTSP")
-    parser.add_argument("--spots", required=True, help="JSON with cameraId and 5 spots")
+    parser.add_argument(
+        "--spots", required=True, help="JSON with cameraId and selected spots"
+    )
     parser.add_argument("--output", required=True, help="Output ROI JSON")
     return parser
 
@@ -23,8 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
 def load_spot_mapping(path: str | Path) -> tuple[str, list[dict[str, str]]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     spots = payload["spots"]
-    if len(spots) != 5:
-        raise ValueError("Week 6 ROI tool requires exactly 5 spots")
+    if not spots:
+        raise ValueError("At least one spot is required")
+    ids = [str(spot["spotId"]) for spot in spots]
+    codes = [str(spot["code"]).strip().upper() for spot in spots]
+    if len(set(ids)) != len(ids) or len(set(codes)) != len(codes):
+        raise ValueError("Duplicate spotId or code")
     return str(payload["cameraId"]), spots
 
 
@@ -118,7 +124,7 @@ def main() -> int:
         for spot, polygon in zip(spots, completed, strict=True)
     ]
     save_rois(args.output, camera_id, rois, width, height)
-    print(f"Saved 5 normalized polygons to {args.output}")
+    print(f"Saved {len(rois)} normalized polygons to {args.output}")
     return 0
 
 

@@ -16,6 +16,7 @@ class VisionApiReporter:
         camera_id: str,
         observations: dict[str, FrameOccupancy],
         metadata: dict[str, Any] | None = None,
+        recognitions: dict[str, dict] | None = None,
     ) -> int:
         try:
             import requests
@@ -32,6 +33,7 @@ class VisionApiReporter:
                     "occupancyStatus": item.status.value,
                     "confidence": round(item.confidence, 4),
                     "timestamp": item.observed_at.isoformat(),
+                    **((recognitions or {}).get(item.spot_id, {})),
                     "metadata": {
                         "spotCode": item.code,
                         "evidence": round(item.evidence, 4),
@@ -41,11 +43,14 @@ class VisionApiReporter:
                 for item in observations.values()
             ]
         }
-        response = requests.post(
-            self.endpoint,
-            json=payload,
-            headers={"x-vision-api-key": self.api_key},
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        return int(response.json()["accepted"])
+        accepted = 0
+        for offset in range(0, len(payload["observations"]), 50):
+            response = requests.post(
+                self.endpoint,
+                json={"observations": payload["observations"][offset : offset + 50]},
+                headers={"x-vision-api-key": self.api_key},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            accepted += int(response.json()["accepted"])
+        return accepted

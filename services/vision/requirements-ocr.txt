@@ -1,0 +1,6 @@
+-r requirements.txt
+# Python 3.11 / Windows CPU. PaddleOCR 3.x predict API, not the 2.x ocr(cls=) API.
+paddlepaddle==3.2.0
+paddleocr==3.3.2
+# Match PaddleX's contrib OpenCV build to avoid overlapping cv2 versions.
+opencv-python==4.10.0.84

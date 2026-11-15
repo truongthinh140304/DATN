@@ -20,6 +20,11 @@ import {
 import { ApiError, apiRequest, friendlyError } from "../api";
 import { useAuth } from "../auth";
 import { AdminPanel } from "../components/AdminPanel";
+import { CameraObservations } from "../components/CameraObservations";
+import { ReservationVerification } from "../components/ReservationVerification";
+import { VisionAlerts } from "../components/VisionAlerts";
+import { SessionOperations } from "../components/SessionOperations";
+import { RealtimeStatus, useRealtimeRefresh } from "../realtime";
 import type {
   ListResponse,
   ParkingArea,
@@ -33,7 +38,13 @@ import type {
 } from "../types";
 
 type View =
-  "overview" | "spots" | "reservations" | "vehicles" | "history" | "admin";
+  | "overview"
+  | "spots"
+  | "reservations"
+  | "vehicles"
+  | "history"
+  | "admin"
+  | "sessions";
 
 const statusMeta: Record<SpotStatus, { label: string; className: string }> = {
   AVAILABLE: { label: "Trống", className: "available" },
@@ -51,6 +62,7 @@ const navItems: Array<{
   { id: "spots", label: "Vị trí đỗ", icon: CircleParking },
   { id: "reservations", label: "Đặt chỗ", icon: CalendarCheck2 },
   { id: "vehicles", label: "Phương tiện", icon: CarFront },
+  { id: "sessions", label: "Xe vào / ra", icon: CheckCircle2 },
   { id: "history", label: "Lịch sử", icon: History },
 ];
 
@@ -85,54 +97,67 @@ export function DashboardPage() {
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, [logout]);
 
-  const loadData = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
-    setError("");
-    try {
-      const requests = [
-        apiRequest<ListResponse<ParkingLot>>("/api/parking/lots?pageSize=100"),
-        apiRequest<ListResponse<ParkingArea>>(
-          "/api/parking/areas?pageSize=100",
-        ),
-        apiRequest<ListResponse<ParkingSpot>>(
-          "/api/parking/spots?pageSize=100",
-        ),
-        apiRequest<ListResponse<Vehicle>>("/api/vehicles?pageSize=100"),
-        apiRequest<ListResponse<Reservation>>("/api/reservations?pageSize=100"),
-        apiRequest<ListResponse<ParkingSession>>("/api/sessions?pageSize=100"),
-      ] as const;
-      const [
-        lotData,
-        areaData,
-        spotData,
-        vehicleData,
-        reservationData,
-        sessionData,
-      ] = await Promise.all(requests);
-      setLots(lotData.items);
-      setAreas(areaData.items);
-      setSpots(spotData.items);
-      setVehicles(vehicleData.items);
-      setReservations(reservationData.items);
-      setSessions(sessionData.items);
-      if (user.role === "ADMIN") {
-        const userData = await apiRequest<ListResponse<User>>(
-          "/api/users?pageSize=100",
-        );
-        setUsers(userData.items);
+  const loadData = useCallback(
+    async (options?: { background?: boolean }) => {
+      if (!user) return;
+      if (!options?.background) setLoading(true);
+      setError("");
+      try {
+        const requests = [
+          apiRequest<ListResponse<ParkingLot>>(
+            "/api/parking/lots?pageSize=100",
+          ),
+          apiRequest<ListResponse<ParkingArea>>(
+            "/api/parking/areas?pageSize=100",
+          ),
+          apiRequest<ListResponse<ParkingSpot>>(
+            "/api/parking/spots?pageSize=100",
+          ),
+          apiRequest<ListResponse<Vehicle>>("/api/vehicles?pageSize=100"),
+          apiRequest<ListResponse<Reservation>>(
+            "/api/reservations?pageSize=100",
+          ),
+          apiRequest<ListResponse<ParkingSession>>(
+            "/api/sessions?pageSize=100",
+          ),
+        ] as const;
+        const [
+          lotData,
+          areaData,
+          spotData,
+          vehicleData,
+          reservationData,
+          sessionData,
+        ] = await Promise.all(requests);
+        setLots(lotData.items);
+        setAreas(areaData.items);
+        setSpots(spotData.items);
+        setVehicles(vehicleData.items);
+        setReservations(reservationData.items);
+        setSessions(sessionData.items);
+        if (user.role === "ADMIN") {
+          const userData = await apiRequest<ListResponse<User>>(
+            "/api/users?pageSize=100",
+          );
+          setUsers(userData.items);
+        }
+        setUpdatedAt(new Date());
+      } catch (requestError) {
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          handleExpiredSession();
+          return;
+        }
+        setError(friendlyError(requestError));
+      } finally {
+        setLoading(false);
       }
-      setUpdatedAt(new Date());
-    } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 401) {
-        handleExpiredSession();
-        return;
-      }
-      setError(friendlyError(requestError));
-    } finally {
-      setLoading(false);
-    }
-  }, [handleExpiredSession, user]);
+    },
+    [handleExpiredSession, user],
+  );
+  const refreshParking = useCallback(() => {
+    void loadData({ background: true });
+  }, [loadData]);
+  useRealtimeRefresh("parking", refreshParking);
 
   useEffect(() => {
     void loadData();
@@ -225,6 +250,7 @@ export function DashboardPage() {
             <p className="header-meta">
               {user.role === "ADMIN" ? "Quản trị viên" : "Người dùng"}
               {updatedAt && <> · Cập nhật lúc {formatTime(updatedAt)}</>}
+              <RealtimeStatus />
             </p>
           </div>
           <div className="header-actions">
@@ -284,6 +310,21 @@ export function DashboardPage() {
           )}
           {!loading && !error && view === "history" && (
             <HistoryView sessions={sessions} />
+          )}
+          {!loading && !error && view === "sessions" && (
+            <SessionOperations
+              vehicles={vehicles}
+              spots={spots}
+              reservations={reservations}
+              sessions={sessions}
+              onChanged={loadData}
+            />
+          )}
+          {!loading && !error && view === "admin" && user.role === "ADMIN" && (
+            <VisionAlerts />
+          )}
+          {!loading && !error && view === "admin" && user.role === "ADMIN" && (
+            <CameraObservations />
           )}
           {!loading && !error && view === "admin" && user.role === "ADMIN" && (
             <AdminPanel
@@ -632,6 +673,7 @@ function ReservationsView({
           )}
         </section>
       </div>
+      <ReservationVerification reservations={reservations} />
       <section className="content-section reservation-history-section">
         <SectionHeader title="Lịch sử đặt chỗ" />
         {reservationHistory.length ? (

@@ -7,6 +7,12 @@
     "apps/*"
   ],
   "scripts": {
+    "test:week10": "node scripts/test-week10.mjs",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test:browser:install": "playwright install chromium",
+    "lint:e2e": "eslint playwright.config.ts tests/e2e/**/*.ts",
+    "vision:setup": "node scripts/vision.mjs setup",
+    "vision:run": "node scripts/vision.mjs run",
     "dev": "concurrently -k -n API,WEB -c cyan,green \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
@@ -21,6 +27,7 @@
     "db:migrate:dev": "npm run db:migrate:dev --workspace apps/api"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "concurrently": "^9.1.0",
     "prettier": "^3.3.3"
   },

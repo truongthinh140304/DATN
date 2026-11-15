@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .domain import ParkingRoi
+from .geometry import is_simple_polygon
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,9 @@ class VisionSettings:
     report_interval_seconds: float = 2.0
     api_url: str = "http://localhost:4000"
     api_key: str = ""
+    plate_config: Path | None = None
+    video_backend: str = "auto"
+    camera_name: str | None = None
 
 
 def parse_source(value: str | int) -> str | int:
@@ -32,6 +36,9 @@ def parse_source(value: str | int) -> str | int:
 def load_settings(path: str | Path) -> VisionSettings:
     config_path = Path(path).resolve()
     payload = json.loads(config_path.read_text(encoding="utf-8"))
+    backend = payload.get("videoBackend", "auto")
+    if backend not in {"auto", "dshow", "msmf"}:
+        raise ValueError("videoBackend must be auto, dshow or msmf")
     roi_path = Path(payload["roiConfig"])
     if not roi_path.is_absolute():
         roi_path = (config_path.parent / roi_path).resolve()
@@ -46,6 +53,11 @@ def load_settings(path: str | Path) -> VisionSettings:
         report_interval_seconds=float(payload.get("reportIntervalSeconds", 2.0)),
         api_url=str(payload.get("apiUrl", "http://localhost:4000")),
         api_key=str(payload.get("apiKey", "")),
+        plate_config=(config_path.parent / payload["plateConfig"]).resolve()
+        if payload.get("plateConfig")
+        else None,
+        video_backend=backend,
+        camera_name=payload.get("cameraName") or None,
     )
 
 
@@ -61,6 +73,10 @@ def load_rois(path: str | Path) -> tuple[str, list[ParkingRoi]]:
         polygon = tuple((float(x), float(y)) for x, y in item["polygon"])
         if len(polygon) < 3:
             raise ValueError(f"ROI {code} must contain at least 3 points")
+        if not is_simple_polygon(polygon):
+            raise ValueError(
+                f"ROI {code} has crossing edges, duplicate points or zero area; recalibrate with vision:setup"
+            )
         if any(not (0 <= x <= 1 and 0 <= y <= 1) for x, y in polygon):
             raise ValueError(f"ROI {code} must use normalized coordinates 0..1")
         if code in seen_codes or spot_id in seen_ids:
@@ -68,6 +84,8 @@ def load_rois(path: str | Path) -> tuple[str, list[ParkingRoi]]:
         seen_codes.add(code)
         seen_ids.add(spot_id)
         rois.append(ParkingRoi(spot_id=spot_id, code=code, polygon=polygon))
+    if not rois:
+        raise ValueError("At least one parking ROI is required")
     return camera_id, rois
 
 
@@ -100,9 +118,7 @@ def save_rois(
     )
 
 
-def to_pixel_rois(
-    rois: list[ParkingRoi], width: int, height: int
-) -> list[ParkingRoi]:
+def to_pixel_rois(rois: list[ParkingRoi], width: int, height: int) -> list[ParkingRoi]:
     return [
         ParkingRoi(
             spot_id=roi.spot_id,

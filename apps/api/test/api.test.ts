@@ -2,6 +2,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../src/app.js";
 import { prisma } from "../src/config/prisma.js";
+import { env } from "../src/config/env.js";
 
 const runDbTests =
   process.env.RUN_DB_TESTS === "true" ? describe : describe.skip;
@@ -118,7 +119,7 @@ runDbTests("smart parking API", () => {
 
     const accepted = await request(app)
       .post("/api/vision/observations")
-      .set("x-vision-api-key", "change_me_vision_service_key")
+      .set("x-vision-api-key", env.VISION_API_KEY)
       .send(observation);
     expect(accepted.status).toBe(202);
     expect(accepted.body.accepted).toBe(1);
@@ -141,5 +142,87 @@ runDbTests("smart parking API", () => {
       .set("Authorization", `Bearer ${userToken}`)
       .send({ vehicleId, spotId });
     expect(second.status).toBe(409);
+  });
+
+  it("stores all four plate match outcomes without modifying business state", async () => {
+    const reservation = await prisma.reservation.findFirstOrThrow({
+      where: { spotId, status: "CONFIRMED" },
+    });
+    const observation = {
+      cameraId: "test-camera",
+      spotId,
+      timestamp: new Date(reservation.startsAt.getTime() + 100).toISOString(),
+      occupancyStatus: "OCCUPIED",
+      confidence: 0.9,
+      recognitionStatus: "READ",
+      plateRaw: "30a-999.99",
+      plateNormalized: "CLIENT_WRONG",
+      ocrConfidence: 0.9,
+      vehicleConfidence: 0.9,
+      associationConfidence: 0.8,
+      plateSamples: 3,
+    };
+    const result = await request(app)
+      .post("/api/vision/observations")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({
+        observations: [
+          observation,
+          { ...observation, plateRaw: "51B-12345" },
+          { ...observation, timestamp: reservation.expiresAt.toISOString() },
+          { ...observation, recognitionStatus: "AMBIGUOUS" },
+        ],
+      });
+    expect(result.status).toBe(202);
+    expect(result.body.accepted).toBe(4);
+    const rows = await prisma.cameraObservation.findMany({
+      where: {
+        cameraId: "test-camera",
+        recognitionStatus: { not: "NOT_REQUESTED" },
+      },
+    });
+    expect(rows.map((row) => row.matchStatus).sort()).toEqual([
+      "INSUFFICIENT",
+      "MATCH",
+      "MISMATCH",
+      "NO_RESERVATION",
+    ]);
+    expect(rows.find((row) => row.matchStatus === "MATCH")).toMatchObject({
+      plateNormalized: "30A99999",
+      reservationId: reservation.id,
+    });
+    expect(
+      (await prisma.parkingSpot.findUniqueOrThrow({ where: { id: spotId } }))
+        .status,
+    ).toBe("RESERVED");
+    expect(
+      (
+        await prisma.reservation.findUniqueOrThrow({
+          where: { id: reservation.id },
+        })
+      ).status,
+    ).toBe("CONFIRMED");
+    expect(await prisma.parkingSession.count({ where: { spotId } })).toBe(0);
+  });
+
+  it("keeps manual check-in and check-out working after vision observations", async () => {
+    const reservation = await prisma.reservation.findFirstOrThrow({
+      where: { spotId, status: "CONFIRMED" },
+    });
+    const checkIn = await request(app)
+      .post("/api/sessions/check-in")
+      .set("Authorization", `Bearer ${userToken}`)
+      .send({ vehicleId, spotId, reservationId: reservation.id });
+    expect(checkIn.status).toBe(201);
+    const checkOut = await request(app)
+      .post(`/api/sessions/${checkIn.body.session.id}/check-out`)
+      .set("Authorization", `Bearer ${userToken}`)
+      .send({});
+    expect(checkOut.status).toBe(200);
+    expect(checkOut.body.session.status).toBe("COMPLETED");
+    expect(
+      (await prisma.parkingSpot.findUniqueOrThrow({ where: { id: spotId } }))
+        .status,
+    ).toBe("AVAILABLE");
   });
 });

@@ -28,8 +28,17 @@ services/vision/config/vision.json
 services/vision/config/spots.json
 services/vision/config/parking_rois.json
 services/vision/output/
+services/vision/config/plates.json
+services/vision/config/*.bak
+*.pdparams
+*.pdiparams
+*.safetensors
+services/vision/local-media/
 
 # Tool caches
 .turbo/
 .vite/
 .prisma/client/
+artifacts/
+test-results/
+playwright-report/

@@ -6,6 +6,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import "./styles.css";
+import { RealtimeProvider } from "./realtime";
 
 function navigate(path: string) {
   window.history.replaceState({}, "", path);
@@ -54,7 +55,9 @@ function App() {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <AuthProvider>
-      <App />
+      <RealtimeProvider>
+        <App />
+      </RealtimeProvider>
     </AuthProvider>
   </React.StrictMode>,
 );

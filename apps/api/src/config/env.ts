@@ -11,6 +11,7 @@ const schema = z.object({
   JWT_ACCESS_SECRET: z.string().min(20),
   JWT_ACCESS_EXPIRES_IN: z.string().default("1d"),
   VISION_API_KEY: z.string().min(20).default("change_me_vision_service_key"),
+  HTTP_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10_000).default(120),
 });
 
 export const env = schema.parse(process.env);

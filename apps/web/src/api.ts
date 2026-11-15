@@ -1,4 +1,4 @@
-const API_BASE_URL =
+export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const TOKEN_KEY = "smart-parking.access-token";
 
@@ -69,6 +69,22 @@ export function friendlyError(error: unknown) {
   if (!(error instanceof ApiError))
     return "Đã có lỗi xảy ra. Vui lòng thử lại.";
   if (error.status === 401) return "Email hoặc mật khẩu không chính xác.";
+  const businessMessages: Record<string, string> = {
+    "Cannot create an already expired reservation":
+      "Thời gian kết thúc đặt chỗ phải còn hiệu lực.",
+    "Reservation is not valid for check-in":
+      "Đặt chỗ chưa tới giờ, đã hết hạn hoặc không còn hiệu lực để check-in.",
+    "Vehicle is inactive": "Phương tiện đã ngừng hoạt động.",
+    "Parking location is inactive": "Ô đỗ, khu hoặc bãi xe đã ngừng hoạt động.",
+    "Vehicle or spot has an active reservation; select the reservation":
+      "Xe hoặc ô đã có đặt chỗ; hãy chọn lượt đặt tương ứng.",
+    "Session is already completed": "Phiên gửi xe đã được check-out.",
+    "Session has already changed":
+      "Phiên gửi xe vừa thay đổi. Vui lòng tải lại.",
+    "Reservation has already changed":
+      "Đặt chỗ vừa được xử lý ở phiên khác. Vui lòng tải lại.",
+  };
+  if (businessMessages[error.message]) return businessMessages[error.message];
   if (error.status === 409)
     return "Thông tin đã tồn tại hoặc vị trí không còn trống.";
   if (error.status === 400)

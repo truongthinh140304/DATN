@@ -4,6 +4,7 @@ import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { AppError, asyncHandler, pagination } from "../../utils/http.js";
 import { listQuery, uuidParam } from "../../utils/schemas.js";
+import { matchReservation, normalizePlate } from "../vision/plate-matching.js";
 
 export const reservationsRouter = Router();
 
@@ -15,6 +16,96 @@ const reserveBody = z.object({
 });
 
 reservationsRouter.use(requireAuth);
+
+reservationsRouter.get(
+  "/:id/verification",
+  asyncHandler(async (req, res) => {
+    const { id } = uuidParam.parse(req.params);
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const reservation = await tx.reservation.findUniqueOrThrow({
+          where: { id },
+          include: { vehicle: true, spot: true },
+        });
+        if (req.user!.role !== "ADMIN" && reservation.userId !== req.user!.id)
+          throw new AppError(403, "Insufficient permission");
+        const now = new Date();
+        const base = {
+          reservationId: id,
+          spotId: reservation.spotId,
+          spotCode: reservation.spot.code,
+          expectedPlate: normalizePlate(reservation.vehicle.plateNumber),
+          matchStatus: "INSUFFICIENT",
+          reason: "waiting_for_camera",
+          observation: null,
+        };
+        if (
+          !["CONFIRMED", "CHECKED_IN"].includes(reservation.status) ||
+          now < reservation.startsAt ||
+          now >= reservation.expiresAt
+        )
+          return { ...base, reason: "reservation_not_effective" };
+        const observation = await tx.cameraObservation.findFirst({
+          where: {
+            spotId: reservation.spotId,
+            observedAt: {
+              gte: new Date(
+                Math.max(
+                  reservation.startsAt.getTime(),
+                  reservation.createdAt.getTime(),
+                ),
+              ),
+              lt: reservation.expiresAt,
+              lte: new Date(now.getTime() + 30_000),
+            },
+            receivedAt: { gte: reservation.createdAt },
+          },
+          orderBy: [
+            { observedAt: "desc" },
+            { receivedAt: "desc" },
+            { id: "desc" },
+          ],
+        });
+        if (!observation) return base;
+        if (now.getTime() - observation.observedAt.getTime() > 60_000)
+          return { ...base, reason: "camera_observation_stale" };
+        const candidates = await tx.reservation.findMany({
+          where: {
+            spotId: reservation.spotId,
+            status: { in: ["CONFIRMED", "CHECKED_IN"] },
+            startsAt: { lte: observation.observedAt },
+            expiresAt: { gt: observation.observedAt },
+          },
+          include: { vehicle: { select: { plateNumber: true } } },
+        });
+        const match = matchReservation(
+          { ...observation, timestamp: observation.observedAt },
+          candidates,
+        );
+        // USER may see their own matching plate, but never another vehicle's plate.
+        const maySeePlate =
+          req.user!.role === "ADMIN" || match.matchStatus === "MATCH";
+        return {
+          ...base,
+          matchStatus: match.matchStatus,
+          reason: match.matchReason,
+          observation: {
+            observedAt: observation.observedAt,
+            occupancyStatus: observation.occupancyStatus,
+            recognitionStatus: observation.recognitionStatus,
+            plateNormalized: maySeePlate ? match.plateNormalized : null,
+            plateHidden: !maySeePlate && !!match.plateNormalized,
+            ocrConfidence: observation.ocrConfidence,
+            plateSamples: observation.plateSamples,
+          },
+        };
+      },
+      { isolationLevel: "RepeatableRead" },
+    );
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  }),
+);
 
 reservationsRouter.get(
   "/",
@@ -53,6 +144,8 @@ reservationsRouter.post(
       body.expiresAt ?? new Date(startsAt.getTime() + 30 * 60 * 1000);
     if (expiresAt <= startsAt)
       throw new AppError(400, "expiresAt must be after startsAt");
+    if (expiresAt <= new Date())
+      throw new AppError(400, "Cannot create an already expired reservation");
 
     const reservation = await prisma.$transaction(async (tx) => {
       const vehicle = await tx.vehicle.findUniqueOrThrow({
@@ -60,9 +153,15 @@ reservationsRouter.post(
       });
       if (req.user!.role !== "ADMIN" && vehicle.ownerId !== req.user!.id)
         throw new AppError(403, "Vehicle does not belong to current user");
+      if (!vehicle.isActive) throw new AppError(409, "Vehicle is inactive");
 
       const updatedSpot = await tx.parkingSpot.updateMany({
-        where: { id: body.spotId, isActive: true, status: "AVAILABLE" },
+        where: {
+          id: body.spotId,
+          isActive: true,
+          status: "AVAILABLE",
+          area: { isActive: true, lot: { isActive: true } },
+        },
         data: { status: "RESERVED" },
       });
       if (updatedSpot.count !== 1)
@@ -95,15 +194,19 @@ reservationsRouter.post(
         throw new AppError(403, "Insufficient permission");
       if (!["PENDING", "CONFIRMED"].includes(current.status))
         throw new AppError(409, "Reservation cannot be cancelled");
-      const updated = await tx.reservation.update({
-        where: { id },
+      const claimed = await tx.reservation.updateMany({
+        where: { id, status: { in: ["PENDING", "CONFIRMED"] } },
         data: { status: "CANCELLED", cancelledAt: new Date() },
       });
-      await tx.parkingSpot.update({
-        where: { id: current.spotId },
+      if (claimed.count !== 1)
+        throw new AppError(409, "Reservation has already changed");
+      const released = await tx.parkingSpot.updateMany({
+        where: { id: current.spotId, status: "RESERVED" },
         data: { status: "AVAILABLE" },
       });
-      return updated;
+      if (released.count !== 1)
+        throw new AppError(409, "Reserved spot state has changed");
+      return tx.reservation.findUniqueOrThrow({ where: { id } });
     });
     return res.json({ reservation });
   }),

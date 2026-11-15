@@ -26,9 +26,11 @@ def point_in_polygon(point: Point, polygon: Sequence[Point]) -> bool:
         x1, y1 = previous
         x2, y2 = current
         cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
-        if abs(cross) < 1e-9 and min(x1, x2) <= x <= max(x1, x2) and min(
-            y1, y2
-        ) <= y <= max(y1, y2):
+        if (
+            abs(cross) < 1e-9
+            and min(x1, x2) <= x <= max(x1, x2)
+            and min(y1, y2) <= y <= max(y1, y2)
+        ):
             return True
         if (y1 > y) != (y2 > y):
             intersection_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
@@ -36,6 +38,48 @@ def point_in_polygon(point: Point, polygon: Sequence[Point]) -> bool:
                 inside = not inside
         previous = current
     return inside
+
+
+def is_simple_polygon(points: Sequence[Point]) -> bool:
+    """Reject crossing/touching non-neighbour edges and duplicate vertices."""
+    if (
+        len(points) < 3
+        or len(set(points)) != len(points)
+        or polygon_area(points) <= 1e-9
+    ):
+        return False
+
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def on_segment(a, b, p):
+        return (
+            abs(cross(a, b, p)) < 1e-9
+            and min(a[0], b[0]) <= p[0] <= max(a[0], b[0])
+            and min(a[1], b[1]) <= p[1] <= max(a[1], b[1])
+        )
+
+    for i in range(len(points)):
+        a, b = points[i], points[(i + 1) % len(points)]
+        for j in range(i + 1, len(points)):
+            if j == i + 1 or (i == 0 and j == len(points) - 1):
+                continue
+            c, d = points[j], points[(j + 1) % len(points)]
+            if (
+                cross(a, b, c) * cross(a, b, d) < 0
+                and cross(c, d, a) * cross(c, d, b) < 0
+            ):
+                return False
+            if any(
+                (
+                    on_segment(a, b, c),
+                    on_segment(a, b, d),
+                    on_segment(c, d, a),
+                    on_segment(c, d, b),
+                )
+            ):
+                return False
+    return True
 
 
 def _clip_edge(
@@ -61,9 +105,7 @@ def _clip_edge(
     return output
 
 
-def clip_polygon_to_box(
-    polygon: Sequence[Point], bbox: BoundingBox
-) -> list[Point]:
+def clip_polygon_to_box(polygon: Sequence[Point], bbox: BoundingBox) -> list[Point]:
     x1, y1, x2, y2 = bbox
 
     def intersect_x(edge_x: float) -> Callable[[Point, Point], Point]:
@@ -113,9 +155,10 @@ def overlap_metrics(
     intersection_area = polygon_area(clip_polygon_to_box(polygon, bbox))
     box_overlap = intersection_area / box_area if box_area else 0.0
     roi_overlap = intersection_area / roi_area if roi_area else 0.0
-    anchor_ratio = sum(
-        point_in_polygon(point, polygon) for point in representative_points(bbox)
-    ) / 3.0
+    anchor_ratio = (
+        sum(point_in_polygon(point, polygon) for point in representative_points(bbox))
+        / 3.0
+    )
     return box_overlap, roi_overlap, anchor_ratio
 
 

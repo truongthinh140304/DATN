@@ -32,10 +32,19 @@
 
 Sự khác nhau giữa hai nguồn chỉ là tín hiệu để cảnh báo/đối chiếu về sau. Camera không trực tiếp sửa trạng thái nghiệp vụ.
 
+## Tuần 7–8
+
+Plate detector riêng hoặc vùng thủ công thử nghiệm → crop frame gốc → tiền xử lý → PaddleOCR → đồng thuận có TTL. Chỉ ghép biển với một xe và một ROI rõ ràng. API key ingest lưu confidence riêng, text raw và normalized (backend tự chuẩn hóa), đối chiếu đúng ô/thời điểm với reservation trong transaction RepeatableRead và lưu snapshot. Không thay đổi trạng thái nghiệp vụ. ADMIN xem bảng lịch sử bằng nút tải lại; USER chỉ nhận occupancy đã lược bỏ nhận diện/metadata.
+
+Chi tiết và giới hạn thực nghiệm: [week7-8-plates.md](week7-8-plates.md).
+
+## Tuần 9
+
+WebSocket có JWT, invalidation sau commit và REST snapshot có phân quyền; xem [hướng dẫn tuần 9](week9-realtime.md). Cảnh báo được lưu và gộp theo camera/ô/biển, ADMIN tiếp nhận; check-in/out do người dùng xác nhận và chạy trong transaction. Mất camera không kết thúc phiên gửi xe.
+
 ## Chưa triển khai
 
-- WebSocket cập nhật dashboard theo thời gian thực.
-- PaddleOCR và đối chiếu biển số.
+- Kiểm định nhận diện biển số/xe đồ chơi trên dữ liệu thực và model detector biển số đã huấn luyện.
 - Tự động check-in/check-out từ kết quả AI.
 - ESP32, cảm biến và MQTT.
 
