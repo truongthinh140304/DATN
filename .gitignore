@@ -24,6 +24,7 @@ models/
 .venv/
 **/.venv/
 .pytest_cache/
+services/vision/config/gate.json
 services/vision/config/vision.json
 services/vision/config/spots.json
 services/vision/config/parking_rois.json

@@ -23,6 +23,7 @@ class OcrRuntimeTest(unittest.TestCase):
     def check_synthetic_text(self, config):
         import cv2
         import numpy as np
+
         from vision.plate_ocr import PaddlePlateOcr
 
         image = np.full((140, 600, 3), 255, dtype=np.uint8)

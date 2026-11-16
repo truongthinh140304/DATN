@@ -3,24 +3,44 @@ import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { AppError, asyncHandler, pagination } from "../../utils/http.js";
 import { listQuery, uuidParam, vehicleBody } from "../../utils/schemas.js";
+import { normalizePlate } from "../gate/plate-utils.js";
 
 export const vehiclesRouter = Router();
 
 vehiclesRouter.use(requireAuth);
+
+function parseNormalizedPlate(raw: string): string {
+  const normalized = normalizePlate(raw);
+  if (!/^[A-Z0-9]{4,15}$/.test(normalized)) {
+    throw new AppError(
+      400,
+      "Plate number must contain 4-15 alphanumeric characters",
+    );
+  }
+  return normalized;
+}
 
 vehiclesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const query = listQuery.parse(req.query);
     const page = pagination(query);
+    const normalizedQuery = query.q ? normalizePlate(query.q) : "";
     const where = {
       ...(req.user!.role === "ADMIN" ? {} : { ownerId: req.user!.id }),
       ...(query.q
         ? {
-            plateNumber: {
-              contains: query.q.toUpperCase(),
-              mode: "insensitive" as const,
-            },
+            OR: [
+              {
+                plateNumber: {
+                  contains: query.q.toUpperCase(),
+                  mode: "insensitive" as const,
+                },
+              },
+              ...(normalizedQuery
+                ? [{ plateNormalized: { contains: normalizedQuery } }]
+                : []),
+            ],
           }
         : {}),
     };
@@ -41,8 +61,9 @@ vehiclesRouter.post(
   "/",
   asyncHandler(async (req, res) => {
     const body = vehicleBody.parse(req.body);
+    const plateNormalized = parseNormalizedPlate(body.plateNumber);
     const vehicle = await prisma.vehicle.create({
-      data: { ...body, ownerId: req.user!.id },
+      data: { ...body, plateNormalized, ownerId: req.user!.id },
     });
     return res.status(201).json({ vehicle });
   }),
@@ -56,7 +77,17 @@ vehiclesRouter.patch(
     if (req.user!.role !== "ADMIN" && current.ownerId !== req.user!.id)
       throw new AppError(403, "Insufficient permission");
     const body = vehicleBody.partial().parse(req.body);
-    const vehicle = await prisma.vehicle.update({ where: { id }, data: body });
+    const plateNormalized =
+      body.plateNumber !== undefined
+        ? parseNormalizedPlate(body.plateNumber)
+        : undefined;
+    const vehicle = await prisma.vehicle.update({
+      where: { id },
+      data: {
+        ...body,
+        ...(plateNormalized !== undefined ? { plateNormalized } : {}),
+      },
+    });
     return res.json({ vehicle });
   }),
 );

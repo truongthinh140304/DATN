@@ -72,12 +72,27 @@ export function friendlyError(error: unknown) {
   const businessMessages: Record<string, string> = {
     "Cannot create an already expired reservation":
       "Thời gian kết thúc đặt chỗ phải còn hiệu lực.",
+    "Reservation expiry must be after start time":
+      "Thời gian kết thúc phải sau thời gian bắt đầu.",
     "Reservation is not valid for check-in":
       "Đặt chỗ chưa tới giờ, đã hết hạn hoặc không còn hiệu lực để check-in.",
+    "Reservation payment is pending":
+      "Lượt đặt chỗ này chưa hoàn tất thanh toán.",
     "Vehicle is inactive": "Phương tiện đã ngừng hoạt động.",
-    "Parking location is inactive": "Ô đỗ, khu hoặc bãi xe đã ngừng hoạt động.",
-    "Vehicle or spot has an active reservation; select the reservation":
-      "Xe hoặc ô đã có đặt chỗ; hãy chọn lượt đặt tương ứng.",
+    "Parking location is inactive": "Bãi xe đã ngừng hoạt động.",
+    "Parking lot is full": "Bãi xe đã hết chỗ trống.",
+    "Vehicle already has an active reservation or parking session":
+      "Xe này đang có vé đặt chỗ hoặc đang gửi trong bãi.",
+    "Vehicle has an active reservation; select the reservation":
+      "Xe đang có vé đặt chỗ hợp lệ; hãy chọn vé tương ứng.",
+    "Invalid license plate format":
+      "Biển số xe cần gồm 4–15 ký tự chữ và số hợp lệ.",
+    "Vehicle with this license plate already exists":
+      "Biển số xe này đã tồn tại trong hệ thống.",
+    "Reservation lot is full":
+      "Bãi xe đã hết sức chứa khả dụng cho khung giờ này.",
+    "Parking lot capacity cannot be smaller than active vehicles and reservations":
+      "Sức chứa không thể nhỏ hơn tổng số xe đang gửi và đang đặt chỗ.",
     "Session is already completed": "Phiên gửi xe đã được check-out.",
     "Session has already changed":
       "Phiên gửi xe vừa thay đổi. Vui lòng tải lại.",

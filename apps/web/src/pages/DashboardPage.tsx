@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   CalendarCheck2,
+  Camera,
   CarFront,
   CheckCircle2,
   CircleParking,
@@ -9,49 +10,31 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LogOut,
-  MapPinned,
   Menu,
   Pencil,
   Plus,
   RefreshCw,
   ShieldCheck,
+  Warehouse,
   X,
 } from "lucide-react";
 import { ApiError, apiRequest, friendlyError } from "../api";
 import { useAuth } from "../auth";
 import { AdminPanel } from "../components/AdminPanel";
-import { CameraObservations } from "../components/CameraObservations";
-import { ReservationVerification } from "../components/ReservationVerification";
-import { VisionAlerts } from "../components/VisionAlerts";
+import { GateMonitor } from "../components/GateMonitor";
 import { SessionOperations } from "../components/SessionOperations";
 import { RealtimeStatus, useRealtimeRefresh } from "../realtime";
 import type {
   ListResponse,
-  ParkingArea,
   ParkingLot,
   ParkingSession,
-  ParkingSpot,
+  PaymentStatus,
   Reservation,
-  SpotStatus,
   User,
   Vehicle,
 } from "../types";
 
-type View =
-  | "overview"
-  | "spots"
-  | "reservations"
-  | "vehicles"
-  | "history"
-  | "admin"
-  | "sessions";
-
-const statusMeta: Record<SpotStatus, { label: string; className: string }> = {
-  AVAILABLE: { label: "Trống", className: "available" },
-  RESERVED: { label: "Đã đặt", className: "reserved" },
-  OCCUPIED: { label: "Đang có xe", className: "occupied" },
-  INACTIVE: { label: "Ngừng hoạt động", className: "inactive" },
-};
+type View = "overview" | "reservations" | "history" | "gate" | "admin";
 
 const navItems: Array<{
   id: View;
@@ -59,20 +42,35 @@ const navItems: Array<{
   icon: typeof LayoutDashboard;
 }> = [
   { id: "overview", label: "Tổng quan", icon: LayoutDashboard },
-  { id: "spots", label: "Vị trí đỗ", icon: CircleParking },
-  { id: "reservations", label: "Đặt chỗ", icon: CalendarCheck2 },
-  { id: "vehicles", label: "Phương tiện", icon: CarFront },
-  { id: "sessions", label: "Xe vào / ra", icon: CheckCircle2 },
+  { id: "reservations", label: "Đặt chỗ & Xe", icon: CalendarCheck2 },
   { id: "history", label: "Lịch sử", icon: History },
 ];
 
+const adminNavItems: Array<{
+  id: View;
+  label: string;
+  icon: typeof LayoutDashboard;
+}> = [
+  { id: "gate", label: "Cổng & Barie", icon: Camera },
+  { id: "admin", label: "Quản trị", icon: ShieldCheck },
+];
+
 function initialView(): View {
-  const value = new URLSearchParams(window.location.search).get(
-    "view",
-  ) as View | null;
-  return value && [...navItems.map((item) => item.id), "admin"].includes(value)
-    ? value
-    : "overview";
+  const raw = new URLSearchParams(window.location.search).get("view");
+  if (raw === "vehicles") return "reservations";
+  if (raw === "sessions") return "gate";
+  const allowed: View[] = [
+    "overview",
+    "reservations",
+    "history",
+    "gate",
+    "admin",
+  ];
+  return raw && allowed.includes(raw as View) ? (raw as View) : "overview";
+}
+
+function normalizePlateInput(value: string) {
+  return value.replace(/[^A-Z0-9]/gi, "").toUpperCase();
 }
 
 export function DashboardPage() {
@@ -83,13 +81,11 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [lots, setLots] = useState<ParkingLot[]>([]);
-  const [areas, setAreas] = useState<ParkingArea[]>([]);
-  const [spots, setSpots] = useState<ParkingSpot[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [sessions, setSessions] = useState<ParkingSession[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [preferredSpotId, setPreferredSpotId] = useState("");
+  const [preferredLotId, setPreferredLotId] = useState("");
 
   const handleExpiredSession = useCallback(() => {
     logout();
@@ -103,35 +99,20 @@ export function DashboardPage() {
       if (!options?.background) setLoading(true);
       setError("");
       try {
-        const requests = [
-          apiRequest<ListResponse<ParkingLot>>(
-            "/api/parking/lots?pageSize=100",
-          ),
-          apiRequest<ListResponse<ParkingArea>>(
-            "/api/parking/areas?pageSize=100",
-          ),
-          apiRequest<ListResponse<ParkingSpot>>(
-            "/api/parking/spots?pageSize=100",
-          ),
-          apiRequest<ListResponse<Vehicle>>("/api/vehicles?pageSize=100"),
-          apiRequest<ListResponse<Reservation>>(
-            "/api/reservations?pageSize=100",
-          ),
-          apiRequest<ListResponse<ParkingSession>>(
-            "/api/sessions?pageSize=100",
-          ),
-        ] as const;
-        const [
-          lotData,
-          areaData,
-          spotData,
-          vehicleData,
-          reservationData,
-          sessionData,
-        ] = await Promise.all(requests);
+        const [lotData, vehicleData, reservationData, sessionData] =
+          await Promise.all([
+            apiRequest<ListResponse<ParkingLot>>(
+              "/api/parking/lots?pageSize=100",
+            ),
+            apiRequest<ListResponse<Vehicle>>("/api/vehicles?pageSize=100"),
+            apiRequest<ListResponse<Reservation>>(
+              "/api/reservations?pageSize=100",
+            ),
+            apiRequest<ListResponse<ParkingSession>>(
+              "/api/sessions?pageSize=100",
+            ),
+          ]);
         setLots(lotData.items);
-        setAreas(areaData.items);
-        setSpots(spotData.items);
         setVehicles(vehicleData.items);
         setReservations(reservationData.items);
         setSessions(sessionData.items);
@@ -154,23 +135,34 @@ export function DashboardPage() {
     },
     [handleExpiredSession, user],
   );
+
+  const refreshInBackground = useCallback(
+    () => loadData({ background: true }),
+    [loadData],
+  );
+
   const refreshParking = useCallback(() => {
-    void loadData({ background: true });
-  }, [loadData]);
+    void refreshInBackground();
+  }, [refreshInBackground]);
+
   useRealtimeRefresh("parking", refreshParking);
+  useRealtimeRefresh("gate", refreshParking);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
 
   useEffect(() => {
-    if (view === "admin" && user?.role !== "ADMIN") {
+    if ((view === "admin" || view === "gate") && user?.role !== "ADMIN") {
       setView("overview");
       window.history.replaceState({}, "", "/dashboard");
     }
   }, [user?.role, view]);
+
   function changeView(next: View) {
-    if (next === "admin" && user?.role !== "ADMIN") return;
+    if ((next === "admin" || next === "gate") && user?.role !== "ADMIN") {
+      return;
+    }
     setView(next);
     setMenuOpen(false);
     const url = next === "overview" ? "/dashboard" : `/dashboard?view=${next}`;
@@ -211,11 +203,17 @@ export function DashboardPage() {
             />
           ))}
           {user.role === "ADMIN" && (
-            <NavButton
-              item={{ id: "admin", label: "Quản trị", icon: ShieldCheck }}
-              active={view === "admin"}
-              onClick={() => changeView("admin")}
-            />
+            <>
+              <div className="nav-divider" aria-hidden />
+              {adminNavItems.map((item) => (
+                <NavButton
+                  key={item.id}
+                  item={item}
+                  active={view === item.id}
+                  onClick={() => changeView(item.id)}
+                />
+              ))}
+            </>
           )}
         </nav>
         <div className="sidebar-user">
@@ -279,61 +277,48 @@ export function DashboardPage() {
           )}
           {!loading && !error && view === "overview" && (
             <Overview
-              spots={spots}
+              lots={lots}
               reservations={reservations}
               sessions={sessions}
-              onNavigate={changeView}
-            />
-          )}
-          {!loading && !error && view === "spots" && (
-            <SpotsView
-              lots={lots}
-              areas={areas}
-              spots={spots}
-              onReserve={(spotId) => {
-                setPreferredSpotId(spotId);
+              onChanged={refreshInBackground}
+              onReserveLot={(lotId) => {
+                setPreferredLotId(lotId);
                 changeView("reservations");
               }}
+              onNavigate={changeView}
             />
           )}
           {!loading && !error && view === "reservations" && (
             <ReservationsView
               vehicles={vehicles}
-              spots={spots}
-              reservations={reservations}
-              preferredSpotId={preferredSpotId}
-              onChanged={loadData}
-            />
-          )}
-          {!loading && !error && view === "vehicles" && (
-            <VehiclesView vehicles={vehicles} onChanged={loadData} />
-          )}
-          {!loading && !error && view === "history" && (
-            <HistoryView sessions={sessions} />
-          )}
-          {!loading && !error && view === "sessions" && (
-            <SessionOperations
-              vehicles={vehicles}
-              spots={spots}
+              lots={lots}
               reservations={reservations}
               sessions={sessions}
-              onChanged={loadData}
+              preferredLotId={preferredLotId}
+              onChanged={refreshInBackground}
             />
           )}
-          {!loading && !error && view === "admin" && user.role === "ADMIN" && (
-            <VisionAlerts />
+          {!loading && !error && view === "history" && (
+            <HistoryView reservations={reservations} sessions={sessions} />
           )}
-          {!loading && !error && view === "admin" && user.role === "ADMIN" && (
-            <CameraObservations />
+          {!loading && !error && view === "gate" && user.role === "ADMIN" && (
+            <div className="gate-stack">
+              <GateMonitor lots={lots} onDataChanged={refreshInBackground} />
+              <SessionOperations
+                vehicles={vehicles}
+                lots={lots}
+                reservations={reservations}
+                sessions={sessions}
+                onChanged={refreshInBackground}
+              />
+            </div>
           )}
           {!loading && !error && view === "admin" && user.role === "ADMIN" && (
             <AdminPanel
               currentUserId={user.id}
               users={users}
               lots={lots}
-              areas={areas}
-              spots={spots}
-              onChanged={loadData}
+              onChanged={refreshInBackground}
             />
           )}
         </div>
@@ -361,46 +346,83 @@ function NavButton({
 }
 
 function Overview({
-  spots,
+  lots,
   reservations,
   sessions,
+  onChanged,
+  onReserveLot,
   onNavigate,
 }: {
-  spots: ParkingSpot[];
+  lots: ParkingLot[];
   reservations: Reservation[];
   sessions: ParkingSession[];
+  onChanged: () => Promise<void>;
+  onReserveLot: (lotId: string) => void;
   onNavigate: (view: View) => void;
 }) {
-  const counts = countSpots(spots);
-  const recent = reservations.slice(0, 4);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const activeLots = lots.filter((lot) => lot.isActive);
+  const totalCapacity = activeLots.reduce((sum, lot) => sum + lot.capacity, 0);
+  const totalAvailable = activeLots.reduce(
+    (sum, lot) => sum + lot.availableSlots,
+    0,
+  );
+  const totalReserved = activeLots.reduce(
+    (sum, lot) => sum + lot.activeReservations,
+    0,
+  );
+  const totalSessions = activeLots.reduce(
+    (sum, lot) => sum + lot.activeSessions,
+    0,
+  );
+  const activeTickets = reservations
+    .filter((item) => ["PENDING", "CONFIRMED"].includes(item.status))
+    .slice(0, 4);
+  const activeSessions = sessions.filter((item) => item.status === "ACTIVE");
+
+  async function cancelTicket(id: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiRequest(`/api/reservations/${id}/cancel`, { method: "POST" });
+      await onChanged();
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageTitle
         title="Tổng quan bãi đỗ"
-        description="Tình trạng vận hành hiện tại từ hệ thống."
+        description="Theo dõi số chỗ trống tại bãi xe và tình trạng vé đặt trước theo biển số."
       />
-      <section className="stats-grid" aria-label="Thống kê vị trí đỗ">
+      <section className="stats-grid" aria-label="Thống kê bãi xe">
         <StatCard
-          label="Tổng vị trí"
-          value={spots.length}
-          icon={CircleParking}
-          tone="neutral"
-        />
-        <StatCard
-          label="Còn trống"
-          value={counts.AVAILABLE}
+          label="Chỗ còn trống"
+          value={totalAvailable}
           icon={CheckCircle2}
           tone="available"
         />
         <StatCard
-          label="Đã đặt"
-          value={counts.RESERVED}
+          label="Tổng sức chứa"
+          value={totalCapacity}
+          icon={Warehouse}
+          tone="neutral"
+        />
+        <StatCard
+          label="Đang giữ chỗ"
+          value={totalReserved}
           icon={Clock3}
           tone="reserved"
         />
         <StatCard
-          label="Đang có xe"
-          value={counts.OCCUPIED}
+          label="Xe đang gửi"
+          value={totalSessions}
           icon={CarFront}
           tone="occupied"
         />
@@ -408,184 +430,261 @@ function Overview({
       <div className="overview-grid">
         <section className="content-section">
           <SectionHeader
-            title="Sơ đồ vị trí"
-            action="Xem tất cả"
-            onAction={() => onNavigate("spots")}
+            title="Bãi xe & Sức chứa"
+            action="Đặt chỗ ngay"
+            onAction={() => onNavigate("reservations")}
           />
-          {spots.length ? (
-            <SpotGrid spots={spots.slice(0, 12)} />
+          {lots.length ? (
+            <div className="lot-capacity-grid">
+              {lots.map((lot) => {
+                const ratio =
+                  lot.capacity > 0
+                    ? Math.min(
+                        100,
+                        Math.round((lot.usedSlots / lot.capacity) * 100),
+                      )
+                    : 0;
+                const full = lot.availableSlots <= 0;
+                return (
+                  <article className="lot-capacity-card" key={lot.id}>
+                    <div className="gate-card-head">
+                      <strong>{lot.name}</strong>
+                      <span
+                        className={`status-badge ${
+                          !lot.isActive
+                            ? "inactive"
+                            : full
+                              ? "occupied"
+                              : "available"
+                        }`}
+                      >
+                        {!lot.isActive
+                          ? "Ngừng hoạt động"
+                          : full
+                            ? "Hết chỗ"
+                            : `Còn ${lot.availableSlots}/${lot.capacity} chỗ`}
+                      </span>
+                    </div>
+                    <small className="muted-caption">{lot.address}</small>
+                    <div
+                      className="lot-progress-track"
+                      aria-label={`Mức sử dụng ${ratio}%`}
+                    >
+                      <div
+                        className="lot-progress-fill"
+                        style={{ width: `${ratio}%` }}
+                      />
+                    </div>
+                    <div className="lot-card-footer">
+                      <small>
+                        Đang gửi: {lot.activeSessions} · Đã đặt:{" "}
+                        {lot.activeReservations}
+                      </small>
+                      {lot.isActive && !full && (
+                        <button
+                          className="spot-action"
+                          type="button"
+                          onClick={() => onReserveLot(lot.id)}
+                        >
+                          Đặt chỗ bãi này
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           ) : (
             <EmptyState
-              icon={CircleParking}
-              title="Chưa có vị trí đỗ"
-              description="Dữ liệu vị trí sẽ xuất hiện sau khi quản trị viên thiết lập bãi xe."
+              icon={Warehouse}
+              title="Chưa có bãi xe"
+              description="Quản trị viên cần tạo bãi xe và cấu hình sức chứa trước khi đặt chỗ."
             />
           )}
         </section>
         <section className="content-section">
           <SectionHeader
-            title="Đặt chỗ gần đây"
+            title="Vé & Xe đang hoạt động"
             action="Quản lý"
             onAction={() => onNavigate("reservations")}
           />
-          {recent.length ? (
-            <ReservationList reservations={recent} />
+          {message && (
+            <p className="form-message" role="status">
+              {message}
+            </p>
+          )}
+          {activeSessions.length > 0 || activeTickets.length > 0 ? (
+            <div className="gate-stack">
+              {activeSessions.length > 0 && (
+                <ActiveSessionList sessions={activeSessions} />
+              )}
+              {activeTickets.length > 0 && (
+                <ReservationList
+                  reservations={activeTickets}
+                  onCancel={cancelTicket}
+                  busy={busy}
+                />
+              )}
+            </div>
           ) : (
             <EmptyState
               icon={CalendarCheck2}
-              title="Chưa có lượt đặt chỗ"
-              description="Các lượt đặt của bạn sẽ được hiển thị tại đây."
+              title="Chưa có vé hoặc xe đang gửi"
+              description="Vào mục “Đặt chỗ & Xe” để nhập biển số và đăng ký chỗ đậu trước khi tới cổng."
             />
           )}
         </section>
       </div>
-      {sessions.some((item) => item.status === "ACTIVE") && (
-        <div className="active-session-note">
-          <CarFront aria-hidden />
-          <span>
-            Bạn đang có{" "}
-            {sessions.filter((item) => item.status === "ACTIVE").length} lượt
-            gửi xe hoạt động.
-          </span>
-        </div>
-      )}
-    </>
-  );
-}
-
-function SpotsView({
-  lots,
-  areas,
-  spots,
-  onReserve,
-}: {
-  lots: ParkingLot[];
-  areas: ParkingArea[];
-  spots: ParkingSpot[];
-  onReserve: (spotId: string) => void;
-}) {
-  const [lotId, setLotId] = useState("");
-  const [areaId, setAreaId] = useState("");
-  const [status, setStatus] = useState<SpotStatus | "">("");
-  const visibleAreas = lotId
-    ? areas.filter((area) => area.lotId === lotId)
-    : areas;
-  const filtered = spots.filter(
-    (spot) =>
-      (!lotId || spot.area.lot.id === lotId) &&
-      (!areaId || spot.areaId === areaId) &&
-      (!status || spot.status === status),
-  );
-  return (
-    <>
-      <PageTitle
-        title="Vị trí đỗ"
-        description="Theo dõi trạng thái từng vị trí theo bãi và khu vực."
-      />
-      <div className="filter-bar">
-        <Select
-          label="Bãi xe"
-          value={lotId}
-          onChange={(value) => {
-            setLotId(value);
-            setAreaId("");
-          }}
-          options={lots.map((lot) => ({ value: lot.id, label: lot.name }))}
-          allLabel="Tất cả bãi xe"
-        />
-        <Select
-          label="Khu vực"
-          value={areaId}
-          onChange={setAreaId}
-          options={visibleAreas.map((area) => ({
-            value: area.id,
-            label: `${area.code} · ${area.name}`,
-          }))}
-          allLabel="Tất cả khu vực"
-        />
-        <Select
-          label="Trạng thái"
-          value={status}
-          onChange={(value) => setStatus(value as SpotStatus | "")}
-          options={Object.entries(statusMeta).map(([value, meta]) => ({
-            value,
-            label: meta.label,
-          }))}
-          allLabel="Tất cả trạng thái"
-        />
-      </div>
-      <div className="spot-legend">
-        {Object.entries(statusMeta).map(([key, meta]) => (
-          <span key={key}>
-            <i className={meta.className} />
-            {meta.label}
-          </span>
-        ))}
-      </div>
-      <section className="content-section spot-section">
-        <div className="result-count">{filtered.length} vị trí phù hợp</div>
-        {filtered.length ? (
-          <SpotGrid spots={filtered} detailed onReserve={onReserve} />
-        ) : (
-          <EmptyState
-            icon={MapPinned}
-            title="Không tìm thấy vị trí"
-            description="Hãy thay đổi bộ lọc để xem các vị trí khác."
-          />
-        )}
-      </section>
     </>
   );
 }
 
 function ReservationsView({
   vehicles,
-  spots,
+  lots,
   reservations,
-  preferredSpotId,
+  sessions,
+  preferredLotId,
   onChanged,
 }: {
   vehicles: Vehicle[];
-  spots: ParkingSpot[];
+  lots: ParkingLot[];
   reservations: Reservation[];
-  preferredSpotId: string;
+  sessions: ParkingSession[];
+  preferredLotId: string;
   onChanged: () => Promise<void>;
 }) {
-  const availableSpots = spots.filter(
-    (spot) => spot.status === "AVAILABLE" && spot.isActive,
+  const activeVehicles = vehicles.filter((item) => item.isActive);
+  const availableLots = lots.filter(
+    (lot) => lot.isActive && lot.availableSlots > 0,
   );
-  const [vehicleId, setVehicleId] = useState(vehicles[0]?.id ?? "");
-  const [spotId, setSpotId] = useState(
-    availableSpots.some((spot) => spot.id === preferredSpotId)
-      ? preferredSpotId
-      : (availableSpots[0]?.id ?? ""),
+
+  const [plateMode, setPlateMode] = useState<"saved" | "new">(
+    activeVehicles.length > 0 ? "saved" : "new",
   );
+  const [vehicleId, setVehicleId] = useState(activeVehicles[0]?.id ?? "");
+  const [newPlate, setNewPlate] = useState("");
+  const [newVehicleType, setNewVehicleType] = useState<Vehicle["type"]>("CAR");
+  const [lotId, setLotId] = useState(
+    availableLots.some((lot) => lot.id === preferredLotId)
+      ? preferredLotId
+      : (availableLots[0]?.id ?? ""),
+  );
+  const [durationHours, setDurationHours] = useState("2");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (
+      preferredLotId &&
+      lots.some(
+        (lot) =>
+          lot.id === preferredLotId && lot.isActive && lot.availableSlots > 0,
+      )
+    ) {
+      setLotId(preferredLotId);
+    }
+  }, [preferredLotId, lots]);
+
+  const effectivePlateMode = activeVehicles.length === 0 ? "new" : plateMode;
+  const effectiveVehicleId = activeVehicles.some((v) => v.id === vehicleId)
+    ? vehicleId
+    : (activeVehicles[0]?.id ?? "");
+  const effectiveLotId = availableLots.some((l) => l.id === lotId)
+    ? lotId
+    : availableLots.some((l) => l.id === preferredLotId)
+      ? preferredLotId
+      : (availableLots[0]?.id ?? "");
+
   const activeReservations = reservations.filter((item) =>
     ["PENDING", "CONFIRMED"].includes(item.status),
   );
-  const reservationHistory = reservations.filter(
-    (item) => !["PENDING", "CONFIRMED"].includes(item.status),
-  );
+  const activeSessions = sessions.filter((item) => item.status === "ACTIVE");
+
+  async function resolveVehicleForBooking(): Promise<{
+    id: string;
+    createdOrUpdated: boolean;
+  }> {
+    if (effectivePlateMode === "saved") {
+      if (!effectiveVehicleId) {
+        throw new Error("Vui lòng chọn phương tiện hoặc nhập biển số mới.");
+      }
+      return { id: effectiveVehicleId, createdOrUpdated: false };
+    }
+
+    const cleanedPlate = newPlate.trim().toUpperCase();
+    const normalized = normalizePlateInput(cleanedPlate);
+    if (!/^[A-Z0-9]{4,15}$/.test(normalized)) {
+      throw new Error(
+        "Biển số xe phải gồm 4–15 ký tự chữ hoặc số (ví dụ: 30A-12345).",
+      );
+    }
+
+    const existing = vehicles.find(
+      (item) => normalizePlateInput(item.plateNumber) === normalized,
+    );
+    if (existing) {
+      if (!existing.isActive) {
+        await apiRequest(`/api/vehicles/${existing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ isActive: true, type: newVehicleType }),
+        });
+        return { id: existing.id, createdOrUpdated: true };
+      }
+      return { id: existing.id, createdOrUpdated: false };
+    }
+
+    const created = await apiRequest<{ vehicle: Vehicle }>("/api/vehicles", {
+      method: "POST",
+      body: JSON.stringify({
+        plateNumber: cleanedPlate,
+        type: newVehicleType,
+      }),
+    });
+    return { id: created.vehicle.id, createdOrUpdated: true };
+  }
 
   async function reserve(event: FormEvent) {
     event.preventDefault();
-    if (!vehicleId || !spotId) {
-      setMessage("Vui lòng chọn phương tiện và vị trí trống.");
+    if (!effectiveLotId) {
+      setMessage("Hiện chưa có bãi xe còn chỗ trống.");
       return;
     }
     setBusy(true);
     setMessage("");
+    let shouldRefresh = false;
     try {
+      const resolved = await resolveVehicleForBooking();
+      shouldRefresh = resolved.createdOrUpdated;
+      const startsAt = new Date();
+      const expiresAt = new Date(
+        startsAt.getTime() + Number(durationHours) * 60 * 60 * 1000,
+      );
       await apiRequest("/api/reservations", {
         method: "POST",
-        body: JSON.stringify({ vehicleId, spotId }),
+        body: JSON.stringify({
+          vehicleId: resolved.id,
+          lotId: effectiveLotId,
+          startsAt: startsAt.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        }),
       });
-      setMessage("Đặt chỗ thành công.");
+      setMessage(
+        "Đặt chỗ thành công. Khi xe tới cổng, camera sẽ quét biển số và mở barie tự động.",
+      );
+      setNewPlate("");
+      setVehicleId(resolved.id);
+      setPlateMode("saved");
       await onChanged();
     } catch (error) {
-      setMessage(friendlyError(error));
+      if (shouldRefresh) {
+        await onChanged();
+      }
+      setMessage(
+        error instanceof Error && !("status" in error)
+          ? error.message
+          : friendlyError(error),
+      );
     } finally {
       setBusy(false);
     }
@@ -607,98 +706,179 @@ function ReservationsView({
   return (
     <>
       <PageTitle
-        title="Đặt chỗ"
-        description="Chọn phương tiện và một vị trí đang trống."
+        title="Đặt chỗ & Xe của tôi"
+        description="Nhập trực tiếp biển số hoặc chọn xe đã lưu để giữ chỗ. Camera tại cổng sẽ mở barie khi khớp biển số."
       />
       <div className="two-column-content">
         <section className="content-section">
-          <h2>Tạo lượt đặt mới</h2>
-          <form className="inline-form" onSubmit={reserve}>
+          <h2>Đăng ký giữ chỗ mới</h2>
+          <form className="inline-form" onSubmit={(e) => void reserve(e)}>
+            {activeVehicles.length > 0 && (
+              <div
+                className="segmented-control"
+                role="tablist"
+                aria-label="Cách chọn biển số"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={effectivePlateMode === "saved"}
+                  className={effectivePlateMode === "saved" ? "active" : ""}
+                  onClick={() => setPlateMode("saved")}
+                >
+                  Chọn xe đã lưu ({activeVehicles.length})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={effectivePlateMode === "new"}
+                  className={effectivePlateMode === "new" ? "active" : ""}
+                  onClick={() => setPlateMode("new")}
+                >
+                  Nhập biển số mới
+                </button>
+              </div>
+            )}
+
+            {effectivePlateMode === "saved" ? (
+              <Select
+                label="Phương tiện (biển số)"
+                value={effectiveVehicleId}
+                onChange={setVehicleId}
+                options={activeVehicles.map((vehicle) => ({
+                  value: vehicle.id,
+                  label: vehicle.plateNumber,
+                }))}
+                allLabel="Chọn phương tiện"
+              />
+            ) : (
+              <div className="form-split">
+                <label>
+                  <span>Biển số xe</span>
+                  <input
+                    value={newPlate}
+                    onChange={(event) =>
+                      setNewPlate(event.target.value.toUpperCase())
+                    }
+                    placeholder="30A-12345"
+                    required
+                  />
+                </label>
+                <Select
+                  label="Loại xe"
+                  value={newVehicleType}
+                  onChange={(value) =>
+                    setNewVehicleType(value as Vehicle["type"])
+                  }
+                  hideEmpty
+                  allLabel=""
+                  options={[
+                    { value: "CAR", label: "Ô tô" },
+                    { value: "MOTORBIKE", label: "Xe máy" },
+                    { value: "OTHER", label: "Khác" },
+                  ]}
+                />
+              </div>
+            )}
+
             <Select
-              label="Phương tiện"
-              value={vehicleId}
-              onChange={setVehicleId}
-              options={vehicles.map((vehicle) => ({
-                value: vehicle.id,
-                label: vehicle.plateNumber,
+              label="Bãi xe"
+              value={effectiveLotId}
+              onChange={setLotId}
+              options={availableLots.map((lot) => ({
+                value: lot.id,
+                label: `${lot.name} (còn ${lot.availableSlots}/${lot.capacity} chỗ)`,
               }))}
-              allLabel="Chọn phương tiện"
+              allLabel="Chọn bãi xe còn chỗ"
             />
+
             <Select
-              label="Vị trí"
-              value={spotId}
-              onChange={setSpotId}
-              options={availableSpots.map((spot) => ({
-                value: spot.id,
-                label: `${spot.code} · ${spot.area.name}`,
-              }))}
-              allLabel="Chọn vị trí trống"
+              label="Thời hạn giữ chỗ"
+              value={durationHours}
+              onChange={setDurationHours}
+              hideEmpty
+              allLabel=""
+              options={[
+                { value: "1", label: "1 giờ kể từ bây giờ" },
+                { value: "2", label: "2 giờ kể từ bây giờ" },
+                { value: "4", label: "4 giờ kể từ bây giờ" },
+                { value: "8", label: "8 giờ kể từ bây giờ" },
+                { value: "24", label: "24 giờ kể từ bây giờ" },
+              ]}
             />
+
+            <div className="payment-note-box">
+              <strong>Thanh toán:</strong> Đang ở chế độ đặt trực tiếp (chưa cần
+              thanh toán online) — vé được xác nhận ngay sau khi gửi.
+            </div>
+
             {message && (
               <p className="form-message" role="status">
                 {message}
               </p>
             )}
+
             <button
               className="primary-button"
-              disabled={busy || !vehicles.length || !availableSpots.length}
+              disabled={busy || !availableLots.length}
             >
               {busy ? <LoaderCircle className="spin" /> : <CalendarCheck2 />}{" "}
               Xác nhận đặt chỗ
             </button>
           </form>
-          {!vehicles.length && (
-            <p className="inline-hint">
-              Bạn cần thêm phương tiện trước khi đặt chỗ.
-            </p>
-          )}
-          {!availableSpots.length && (
-            <p className="inline-hint">Hiện chưa có vị trí trống.</p>
+
+          {!availableLots.length && (
+            <p className="inline-hint">Hiện chưa có bãi xe còn chỗ trống.</p>
           )}
         </section>
+
         <section className="content-section">
-          <h2>Đặt chỗ đang hiệu lực</h2>
-          {activeReservations.length ? (
-            <ReservationList
-              reservations={activeReservations}
-              onCancel={cancel}
-              busy={busy}
-            />
+          <div className="section-header">
+            <h2>Vé &amp; Xe đang hoạt động</h2>
+            {activeSessions.length > 0 && (
+              <span className="status-badge occupied">
+                {activeSessions.length} xe đang trong bãi
+              </span>
+            )}
+          </div>
+          {activeSessions.length > 0 || activeReservations.length > 0 ? (
+            <div className="gate-stack">
+              {activeSessions.length > 0 && (
+                <ActiveSessionList sessions={activeSessions} />
+              )}
+              {activeReservations.length > 0 && (
+                <ReservationList
+                  reservations={activeReservations}
+                  onCancel={cancel}
+                  busy={busy}
+                />
+              )}
+            </div>
           ) : (
             <EmptyState
               icon={CalendarCheck2}
-              title="Không có đặt chỗ đang hiệu lực"
-              description="Lượt đặt mới sẽ xuất hiện tại đây."
+              title="Không có vé hoặc xe đang hoạt động"
+              description="Vé đặt mới hoặc xe vừa qua cổng sẽ hiển thị ngay tại đây."
             />
           )}
         </section>
       </div>
-      <ReservationVerification reservations={reservations} />
-      <section className="content-section reservation-history-section">
-        <SectionHeader title="Lịch sử đặt chỗ" />
-        {reservationHistory.length ? (
-          <ReservationList reservations={reservationHistory} />
-        ) : (
-          <EmptyState
-            icon={History}
-            title="Chưa có lịch sử đặt chỗ"
-            description="Các lượt đã hủy, hết hạn hoặc hoàn tất sẽ xuất hiện tại đây."
-          />
-        )}
-      </section>
+
+      <VehiclesSection vehicles={vehicles} onChanged={onChanged} />
     </>
   );
 }
 
-function VehiclesView({
+function VehiclesSection({
   vehicles,
   onChanged,
 }: {
   vehicles: Vehicle[];
   onChanged: () => Promise<void>;
 }) {
+  const [showForm, setShowForm] = useState(false);
   const [plateNumber, setPlateNumber] = useState("");
-  const [type, setType] = useState("CAR");
+  const [type, setType] = useState<Vehicle["type"]>("CAR");
   const [brand, setBrand] = useState("");
   const [color, setColor] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -712,6 +892,7 @@ function VehiclesView({
     setBrand(vehicle.brand ?? "");
     setColor(vehicle.color ?? "");
     setMessage("");
+    setShowForm(true);
   }
 
   function resetForm() {
@@ -724,8 +905,8 @@ function VehiclesView({
 
   async function saveVehicle(event: FormEvent) {
     event.preventDefault();
-    if (plateNumber.trim().length < 4) {
-      setMessage("Biển số cần ít nhất 4 ký tự.");
+    if (normalizePlateInput(plateNumber).length < 4) {
+      setMessage("Biển số cần ít nhất 4 ký tự chữ hoặc số.");
       return;
     }
     setBusy(true);
@@ -736,7 +917,7 @@ function VehiclesView({
         {
           method: editingId ? "PATCH" : "POST",
           body: JSON.stringify({
-            plateNumber: plateNumber.trim(),
+            plateNumber: plateNumber.trim().toUpperCase(),
             type,
             brand: brand.trim() || undefined,
             color: color.trim() || undefined,
@@ -747,6 +928,7 @@ function VehiclesView({
         editingId ? "Đã cập nhật phương tiện." : "Đã thêm phương tiện.",
       );
       resetForm();
+      setShowForm(false);
       await onChanged();
     } catch (error) {
       setMessage(friendlyError(error));
@@ -754,18 +936,44 @@ function VehiclesView({
       setBusy(false);
     }
   }
+
   return (
-    <>
-      <PageTitle
-        title="Phương tiện"
-        description="Quản lý phương tiện gắn với tài khoản của bạn."
-      />
-      <div className="two-column-content vehicle-layout">
-        <section className="content-section compact-section">
-          <h2>{editingId ? "Cập nhật phương tiện" : "Thêm phương tiện"}</h2>
-          <form className="inline-form" onSubmit={saveVehicle}>
+    <section className="content-section reservation-history-section">
+      <div className="section-header">
+        <div>
+          <h2>Xe đã lưu ({vehicles.length})</h2>
+          <small className="muted-caption">
+            Biển số đã đăng ký để đặt chỗ nhanh hơn cho các lần sau.
+          </small>
+        </div>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => {
+            if (showForm && editingId) resetForm();
+            setShowForm((value) => !value);
+            setMessage("");
+          }}
+        >
+          {showForm ? <X aria-hidden /> : <Plus aria-hidden />}
+          {showForm ? "Đóng form" : "Thêm xe"}
+        </button>
+      </div>
+
+      {message && !showForm && (
+        <p className="form-message" role="status">
+          {message}
+        </p>
+      )}
+
+      {showForm && (
+        <form
+          className="inline-form vehicle-inline-form"
+          onSubmit={(e) => void saveVehicle(e)}
+        >
+          <div className="form-split">
             <label>
-              <span>Biển số</span>
+              <span>Biển số xe</span>
               <input
                 value={plateNumber}
                 onChange={(event) =>
@@ -777,7 +985,7 @@ function VehiclesView({
             <Select
               label="Loại xe"
               value={type}
-              onChange={setType}
+              onChange={(value) => setType(value as Vehicle["type"])}
               hideEmpty
               options={[
                 { value: "CAR", label: "Ô tô" },
@@ -786,101 +994,113 @@ function VehiclesView({
               ]}
               allLabel=""
             />
-            <div className="form-split">
-              <label>
-                <span>Hãng xe</span>
-                <input
-                  value={brand}
-                  onChange={(event) => setBrand(event.target.value)}
-                  placeholder="Toyota"
-                />
-              </label>
-              <label>
-                <span>Màu sắc</span>
-                <input
-                  value={color}
-                  onChange={(event) => setColor(event.target.value)}
-                  placeholder="Trắng"
-                />
-              </label>
-            </div>
-            {message && <p className="form-message">{message}</p>}
-            <div className="form-actions">
-              <button className="primary-button" disabled={busy}>
-                {busy ? (
-                  <LoaderCircle className="spin" />
-                ) : editingId ? (
-                  <Pencil />
-                ) : (
-                  <Plus />
-                )}
-                {editingId ? "Lưu thay đổi" : "Thêm phương tiện"}
-              </button>
-              {editingId && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={resetForm}
-                >
-                  <X /> Hủy sửa
-                </button>
+          </div>
+          <div className="form-split">
+            <label>
+              <span>Hãng xe (không bắt buộc)</span>
+              <input
+                value={brand}
+                onChange={(event) => setBrand(event.target.value)}
+                placeholder="Toyota"
+              />
+            </label>
+            <label>
+              <span>Màu sắc (không bắt buộc)</span>
+              <input
+                value={color}
+                onChange={(event) => setColor(event.target.value)}
+                placeholder="Trắng"
+              />
+            </label>
+          </div>
+          {message && <p className="form-message">{message}</p>}
+          <div className="form-actions">
+            <button className="primary-button" disabled={busy}>
+              {busy ? (
+                <LoaderCircle className="spin" />
+              ) : editingId ? (
+                <Pencil />
+              ) : (
+                <Plus />
               )}
+              {editingId ? "Lưu thay đổi" : "Thêm phương tiện"}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                resetForm();
+                setShowForm(false);
+              }}
+            >
+              Hủy
+            </button>
+          </div>
+        </form>
+      )}
+
+      {vehicles.length ? (
+        <div className="vehicle-list">
+          {vehicles.map((vehicle) => (
+            <div className="vehicle-row" key={vehicle.id}>
+              <span className="vehicle-icon">
+                <CarFront />
+              </span>
+              <span>
+                <strong>{vehicle.plateNumber}</strong>
+                <small>
+                  {vehicleTypeLabel(vehicle.type)}
+                  {vehicle.brand ? ` · ${vehicle.brand}` : ""}
+                  {vehicle.color ? ` · ${vehicle.color}` : ""}
+                </small>
+              </span>
+              <span
+                className={`status-badge ${vehicle.isActive ? "available" : "inactive"}`}
+              >
+                {vehicle.isActive ? "Hoạt động" : "Ngừng"}
+              </span>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => editVehicle(vehicle)}
+                aria-label={`Chỉnh sửa ${vehicle.plateNumber}`}
+                title="Chỉnh sửa"
+              >
+                <Pencil />
+              </button>
             </div>
-          </form>
-        </section>
-        <section className="content-section">
-          <h2>Danh sách phương tiện</h2>
-          {vehicles.length ? (
-            <div className="vehicle-list">
-              {vehicles.map((vehicle) => (
-                <div className="vehicle-row" key={vehicle.id}>
-                  <span className="vehicle-icon">
-                    <CarFront />
-                  </span>
-                  <span>
-                    <strong>{vehicle.plateNumber}</strong>
-                    <small>
-                      {vehicleTypeLabel(vehicle.type)}
-                      {vehicle.brand ? ` · ${vehicle.brand}` : ""}
-                    </small>
-                  </span>
-                  <span
-                    className={`status-badge ${vehicle.isActive ? "available" : "inactive"}`}
-                  >
-                    {vehicle.isActive ? "Hoạt động" : "Ngừng"}
-                  </span>
-                  <button
-                    className="icon-button"
-                    onClick={() => editVehicle(vehicle)}
-                    aria-label={`Chỉnh sửa ${vehicle.plateNumber}`}
-                    title="Chỉnh sửa"
-                  >
-                    <Pencil />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              icon={CarFront}
-              title="Chưa có phương tiện"
-              description="Thêm phương tiện để bắt đầu đặt chỗ."
-            />
-          )}
-        </section>
-      </div>
-    </>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={CarFront}
+          title="Chưa có xe đã lưu"
+          description="Khi bạn nhập biển số đặt chỗ ở trên, xe sẽ tự động được lưu tại đây."
+        />
+      )}
+    </section>
   );
 }
 
-function HistoryView({ sessions }: { sessions: ParkingSession[] }) {
+function HistoryView({
+  reservations,
+  sessions,
+}: {
+  reservations: Reservation[];
+  sessions: ParkingSession[];
+}) {
+  const reservationHistory = reservations.filter(
+    (item) => !["PENDING", "CONFIRMED"].includes(item.status),
+  );
+
   return (
     <>
       <PageTitle
-        title="Lịch sử gửi xe"
-        description="Các lượt check-in và check-out ghi nhận bởi hệ thống."
+        title="Lịch sử gửi xe & Đặt chỗ"
+        description="Theo dõi các phiên xe vào/ra bãi và những vé đặt trước đã xử lý."
       />
       <section className="content-section">
+        <SectionHeader title="Phiên gửi xe" />
         {sessions.length ? (
           <div className="history-list">
             {sessions.map((session) => (
@@ -890,24 +1110,20 @@ function HistoryView({ sessions }: { sessions: ParkingSession[] }) {
                 />
                 <span>
                   <strong>{session.vehicle.plateNumber}</strong>
-                  <small>
-                    {session.spot.code} · {session.spot.area.lot.name}
-                  </small>
+                  <small>{session.lot.name}</small>
                 </span>
                 <span>
-                  <strong>{formatDateTime(session.checkedInAt)}</strong>
+                  <strong>Vào: {formatDateTime(session.checkedInAt)}</strong>
                   <small>
                     {session.checkedOutAt
                       ? `Ra lúc ${formatDateTime(session.checkedOutAt)}`
-                      : "Đang gửi xe"}
+                      : "Đang gửi trong bãi"}
                   </small>
                 </span>
                 <span
                   className={`status-badge ${session.status === "ACTIVE" ? "occupied" : "neutral"}`}
                 >
-                  {session.status === "ACTIVE"
-                    ? "Đang hoạt động"
-                    : "Đã hoàn tất"}
+                  {session.status === "ACTIVE" ? "Đang gửi" : "Đã hoàn tất"}
                 </span>
               </div>
             ))}
@@ -916,7 +1132,20 @@ function HistoryView({ sessions }: { sessions: ParkingSession[] }) {
           <EmptyState
             icon={History}
             title="Chưa có lịch sử gửi xe"
-            description="Dữ liệu xuất hiện sau khi một lượt gửi xe được check-in."
+            description="Dữ liệu xuất hiện sau khi xe qua cổng tự động hoặc được check-in."
+          />
+        )}
+      </section>
+
+      <section className="content-section reservation-history-section">
+        <SectionHeader title="Lịch sử đặt chỗ" />
+        {reservationHistory.length ? (
+          <ReservationList reservations={reservationHistory} />
+        ) : (
+          <EmptyState
+            icon={CalendarCheck2}
+            title="Chưa có lịch sử đặt chỗ"
+            description="Các vé đã sử dụng, đã hủy hoặc hết hạn sẽ hiển thị tại đây."
           />
         )}
       </section>
@@ -924,44 +1153,26 @@ function HistoryView({ sessions }: { sessions: ParkingSession[] }) {
   );
 }
 
-function SpotGrid({
-  spots,
-  detailed = false,
-  onReserve,
-}: {
-  spots: ParkingSpot[];
-  detailed?: boolean;
-  onReserve?: (spotId: string) => void;
-}) {
+function ActiveSessionList({ sessions }: { sessions: ParkingSession[] }) {
   return (
-    <div className="parking-grid">
-      {spots.map((spot) => {
-        const meta = statusMeta[spot.status];
-        return (
-          <article className={`parking-spot ${meta.className}`} key={spot.id}>
-            <div className="spot-top">
-              <strong>{spot.code}</strong>
-              <span className={`status-dot ${meta.className}`} />
-            </div>
-            <CarFront aria-hidden />
-            <span className="spot-status">{meta.label}</span>
-            {detailed && (
-              <small>
-                {spot.area.lot.name} · {spot.area.name}
-              </small>
-            )}
-            {detailed && spot.status === "AVAILABLE" && onReserve && (
-              <button
-                className="spot-action"
-                onClick={() => onReserve(spot.id)}
-                aria-label={`Đặt vị trí ${spot.code}`}
-              >
-                Đặt chỗ
-              </button>
-            )}
-          </article>
-        );
-      })}
+    <div className="reservation-list">
+      {sessions.map((session) => (
+        <div className="reservation-row" key={session.id}>
+          <span className="vehicle-icon">
+            <CarFront />
+          </span>
+          <span>
+            <strong>
+              {session.vehicle.plateNumber} · {session.lot.name}
+            </strong>
+            <small>Vào bãi lúc {formatDateTime(session.checkedInAt)}</small>
+          </span>
+          <span>
+            <span className="status-badge occupied">Đang trong bãi</span>
+            <small>Tự mở barie khi xe ra</small>
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -984,9 +1195,12 @@ function ReservationList({
           </span>
           <span>
             <strong>
-              {reservation.spot.code} · {reservation.vehicle.plateNumber}
+              {reservation.vehicle.plateNumber} · {reservation.lot.name}
             </strong>
-            <small>{reservation.spot.area.lot.name}</small>
+            <small>
+              {paymentStatusLabel(reservation.paymentStatus)} · Bắt đầu{" "}
+              {formatDateTime(reservation.startsAt)}
+            </small>
           </span>
           <span>
             <strong>{reservationStatusLabel(reservation.status)}</strong>
@@ -1145,16 +1359,6 @@ function ErrorState({
   );
 }
 
-function countSpots(spots: ParkingSpot[]) {
-  return spots.reduce<Record<SpotStatus, number>>(
-    (result, spot) => {
-      result[spot.status] += 1;
-      return result;
-    },
-    { AVAILABLE: 0, RESERVED: 0, OCCUPIED: 0, INACTIVE: 0 },
-  );
-}
-
 function initials(name: string) {
   return name
     .split(" ")
@@ -1164,12 +1368,14 @@ function initials(name: string) {
     .join("")
     .toUpperCase();
 }
+
 function formatTime(value: Date) {
   return new Intl.DateTimeFormat("vi-VN", {
     hour: "2-digit",
     minute: "2-digit",
   }).format(value);
 }
+
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
@@ -1178,16 +1384,26 @@ function formatDateTime(value: string) {
     minute: "2-digit",
   }).format(new Date(value));
 }
+
 function vehicleTypeLabel(type: Vehicle["type"]) {
   return { CAR: "Ô tô", MOTORBIKE: "Xe máy", OTHER: "Khác" }[type];
 }
+
+function paymentStatusLabel(status: PaymentStatus) {
+  return {
+    NOT_REQUIRED: "Chưa bật thu phí",
+    UNPAID: "Chờ thanh toán",
+    PAID: "Đã thanh toán",
+  }[status];
+}
+
 function reservationStatusLabel(status: Reservation["status"]) {
   return {
     PENDING: "Đang chờ",
     CONFIRMED: "Đã xác nhận",
     CANCELLED: "Đã hủy",
     EXPIRED: "Hết hạn",
-    CHECKED_IN: "Đã check-in",
+    CHECKED_IN: "Đã vào bãi",
     COMPLETED: "Hoàn tất",
   }[status];
 }

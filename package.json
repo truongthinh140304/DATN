@@ -2,17 +2,17 @@
   "name": "smart-parking-thesis",
   "private": true,
   "version": "0.1.0",
-  "description": "Monorepo for an IoT-ready smart parking system with realtime web foundation.",
+  "description": "Smart Parking Gate Barrier system with ANPR (YOLO + PaddleOCR), Arduino Uno R3 SG90, and Realtime Web.",
   "workspaces": [
     "apps/*"
   ],
   "scripts": {
-    "test:week10": "node scripts/test-week10.mjs",
+    "gate:run": "node scripts/gate.mjs run",
+    "gate:preflight": "node scripts/gate.mjs preflight",
+    "vision:run": "node scripts/gate.mjs run",
     "test:e2e": "playwright test --config playwright.config.ts",
     "test:browser:install": "playwright install chromium",
     "lint:e2e": "eslint playwright.config.ts tests/e2e/**/*.ts",
-    "vision:setup": "node scripts/vision.mjs setup",
-    "vision:run": "node scripts/vision.mjs run",
     "dev": "concurrently -k -n API,WEB -c cyan,green \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",

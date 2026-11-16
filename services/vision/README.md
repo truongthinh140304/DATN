@@ -1,106 +1,65 @@
-# Smart Parking Vision Service
+# Smart Parking Gate Vision Service (Python + YOLO + PaddleOCR + Arduino Serial)
 
-Cửa sổ chạy tích hợp `npm.cmd run vision:run` tự thu vừa tối đa 1100×650 và cho phép kéo giãn để thấy đủ các ô. Chỉ cửa sổ xem được thu nhỏ; YOLO, ROI và OCR vẫn xử lý frame gốc. Nhấn **R** để chọn lại vùng biển số nếu xe/camera đã di chuyển.
+Tiến trình chạy trên laptop kết nối đồng thời:
 
-Module Python đọc webcam, MP4 hoặc RTSP, dùng Ultralytics YOLO phát hiện phương tiện và ánh xạ vào các polygon theo dữ liệu cấu hình (có thể chọn 3–4 ô). Tuần 7–8 bổ sung OCR biển số, gán với xe/ô và gửi **kết quả quan sát** sang Express. Không thay đổi đặt chỗ, check-in, check-out hay trạng thái nghiệp vụ.
+1. **Webcam USB** hướng vào biển số xe trước cổng.
+2. **Backend API** (`POST /api/gate/scan`, `POST /api/gate/heartbeat`, `POST /api/gate/commands/claim`).
+3. **Arduino Uno R3** qua cổng USB Serial (`9600` baud) để nâng/hạ Servo SG90 ở chân `D4`.
 
-**Tuần 7–8:** [cài PaddleOCR, chạy ảnh/webcam/video, cấu hình model riêng hoặc vùng thủ công](../../docs/week7-8-plates.md). `yolo11n.pt` không phải model biển số, chưa kiểm định trên xe đồ chơi. Dùng `python -m vision.plate_cli` để thử OCR độc lập; thêm `plateConfig` vào settings để tích hợp. Model biển số không kèm sẵn.
-
-## Demo nhanh webcam: xe và biển số viết tay
-
-Sau khi cài `requirements-ocr.txt`, không cần ROI ô đỗ hoặc database:
+## Cài đặt môi trường `.venv` (Windows)
 
 ```powershell
-cd D:\DATN\services\vision
-.\.venv\Scripts\python.exe -m vision.camera_demo --source 0
+cd services/vision
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-ocr.txt
 ```
 
-Demo mặc định chọn camera **số 0**, dùng **DirectShow trên Windows** để kết nối webcam USB/local; không mặc định chọn nguồn điện thoại số 1. Với webcam USB Windows hiện nhận là `USB2.0 HD UVC WebCam`, chạy:
+> Lưu ý: `requirements-ocr.txt` đã gồm `ultralytics`, `paddleocr`, `paddlepaddle`, `opencv-python`, `requests`, `pyserial`.
+
+## Cấu hình `config/gate.json`
+
+Sao chép từ mẫu nếu chưa có:
 
 ```powershell
-cd D:\DATN\services\vision
-.\.venv\Scripts\python.exe -m vision.camera_demo
-# Hoặc ghi rõ nguồn/backend:
-.\.venv\Scripts\python.exe -m vision.camera_demo --source 0 --backend dshow
+copy config\gate.example.json config\gate.json
 ```
 
-Nếu máy có nhiều camera, chỉ số có thể thay đổi; dùng `--source` chỉ rõ camera USB cần chọn. Chương trình in `CAMERA_SOURCE` và backend khi mở, không tự chuyển sang camera điện thoại khi nguồn đã chọn không mở được.
+Các trường chính trong `config/gate.json`:
 
-YOLO hiển thị hộp xe và confidence. Đưa giấy biển số viết chữ in hoa, nét đậm vào khung xanh ngọc để thử OCR; nhấn **R** khoanh vùng sát biển, **Enter** xác nhận, **C** xóa kết quả, **Q/Esc** thoát. Đây là OCR vùng chọn thủ công, độc lập với nhận diện xe. Số xe bằng 0 chỉ nghĩa là model chưa phát hiện xe. Chưa khẳng định nhận được xe đồ chơi hoặc chữ viết tay. Demo không ghi hình hoặc gửi API, chỉ hiển thị và in kết quả thực ra terminal. Model phương tiện tải lần đầu vào `models/` đã ignore.
+- `gateId`: mã cổng (mặc định `"main-gate-01"`).
+- `lotId`: để `null` để tự lấy bãi duy nhất từ `GET /api/gate/lots`, hoặc điền UUID của bãi.
+- `source`: `0` (webcam mặc định), `"1"`, đường dẫn video `.mp4`, hoặc RTSP URL.
+- `plateMode`:
+  - `"scan_zone"` (khuyên dùng cho mô hình): OCR đọc trong khung `scanRegion` trước cổng — hoạt động được cả với xe thật lẫn xe mô hình / biển số in giấy.
+  - `"full_frame"`: quét toàn bộ khung hình.
+  - `"model"`: dùng model YOLO phát hiện biển số riêng qua `plateModelPath`.
+- `scanRegion`: `[x1, y1, x2, y2]` chuẩn hóa `0..1` (có thể chỉnh trực tiếp trên màn hình bằng phím `R`).
+- `arduino`:
+  - `enabled`: `true` / `false`
+  - `port`: `"auto"` (tự tìm cổng Uno / CH340 / FTDI) hoặc chỉ định rõ `"COM5"`
+  - `baudrate`: `9600`
+  - `openMs`: `5000` (mở barie 5 giây rồi tự đóng).
 
-Trạng thái OCR: `TEXT_ONLY` = đọc được chữ nhưng chưa đúng định dạng biển hỗ trợ; `PENDING` = cần thêm frame ổn định; `READ` = đủ đồng thuận/định dạng; `UNREADABLE` = chưa đọc được hoặc ảnh mờ; `WAITING` = kết quả cũ, đang chờ frame mới. Ví dụ giấy chỉ ghi `61A123` vẫn thử đọc chữ được, nhưng chưa đủ số ký tự để xác nhận biển số. Không sửa kết quả OCR thành một biển số mẫu.
+## Kiểm tra thiết bị & Chạy
 
-Tài liệu đầy đủ: [`docs/week6-vision.md`](../../docs/week6-vision.md).
+Từ thư mục gốc repo:
 
-## Cài đặt trên Windows
+```bash
+npm run gate:preflight
+npm run gate:run
+```
 
-Yêu cầu Python 3.10-3.12. Từ thư mục `D:\DATN`:
+Hoặc chạy trực tiếp bằng Python trong `services/vision`:
 
 ```powershell
-cd services\vision
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+.venv\Scripts\python.exe -m vision.preflight
+.venv\Scripts\python.exe -m vision --settings config/gate.json
 ```
 
-Nếu PowerShell chặn script kích hoạt, chạy một lần trong cửa sổ hiện tại:
+Tham số dòng lệnh của `python -m vision`:
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-Lần đầu chạy YOLO, Ultralytics có thể tải model nhỏ `yolo11n.pt`. Model, video và file cấu hình thật đều đã được `.gitignore` loại khỏi Git.
-
-## Tạo cấu hình
-
-```powershell
-Copy-Item config\vision.example.json config\vision.json
-Copy-Item config\spots.example.json config\spots.json
-```
-
-Lấy UUID thật của A01-A05 từ PostgreSQL rồi thay các giá trị `replace-with-database-uuid-*` trong `config\spots.json`:
-
-```sql
-SELECT ps.id, ps.code
-FROM parking_spots AS ps
-WHERE ps.code IN ('A01', 'A02', 'A03', 'A04', 'A05')
-ORDER BY ps.code;
-```
-
-## Vẽ ROI
-
-Webcam laptop:
-
-```powershell
-python -m vision.roi_tool --source 0 --spots config\spots.json --output config\parking_rois.json
-```
-
-Video MP4:
-
-```powershell
-python -m vision.roi_tool --source "D:\video\bai-xe.mp4" --spots config\spots.json --output config\parking_rois.json
-```
-
-Trong công cụ ROI: chuột trái thêm điểm, chuột phải bỏ điểm cuối, `Enter` xác nhận polygon, `R` vẽ lại polygon hiện tại, `Q` hoặc `Esc` thoát. Tọa độ được lưu dạng chuẩn hóa nên dùng được khi độ phân giải nguồn thay đổi cùng tỉ lệ khung hình.
-
-## Chạy nhận diện
-
-Đặt cùng một khóa bí mật `VISION_API_KEY` trong `apps\api\.env` và phiên PowerShell chạy Python:
-
-```powershell
-$env:VISION_API_KEY="thay-bang-khoa-bi-mat-dai"
-python -m vision --settings config\vision.json
-```
-
-Phím điều khiển: `Space` tạm dừng/tiếp tục, `Q` hoặc `Esc` thoát. Chạy không gửi API để kiểm tra cục bộ:
-
-```powershell
-python -m vision --settings config\vision.json --no-api
-```
-
-Chạy test không cần camera và không cần tải model:
-
-```powershell
-python -m unittest discover -s tests -v
-```
+- `--settings <path>`: file cấu hình JSON (mặc định `config/gate.json`).
+- `--no-arduino`: chạy giả lập lệnh mở barie không cần mở cổng COM.
+- `--no-api`: chỉ test camera + OCR cục bộ, không gọi API backend.
+- `--headless`: chạy nền không mở cửa sổ OpenCV.
+- `--max-frames <n>`: dừng sau `<n>` khung hình (`0` = chạy liên tục).

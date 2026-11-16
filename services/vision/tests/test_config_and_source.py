@@ -3,8 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vision.config import load_rois, parse_source, save_rois
-from vision.domain import ParkingRoi
+from vision.config import load_gate_settings, parse_source, save_scan_region
 from vision.source import SourceOpenError, open_video_source
 
 
@@ -13,7 +12,7 @@ class FakeCapture:
         self.opened = opened
         self.released = False
 
-    def isOpened(self) -> bool:  # OpenCV-compatible method name.
+    def isOpened(self) -> bool:
         return self.opened
 
     def release(self) -> None:
@@ -32,23 +31,46 @@ class ConfigAndSourceTests(unittest.TestCase):
             open_video_source("missing.mp4", lambda _source: fake)
         self.assertTrue(fake.released)
 
-    def test_normalized_roi_round_trip_preserves_database_mapping(self) -> None:
-        rois = [
-            ParkingRoi(
-                spot_id=f"spot-{index}",
-                code=f"A0{index}",
-                polygon=((0.1, 0.1), (0.2, 0.1), (0.2, 0.8), (0.1, 0.8)),
-            )
-            for index in range(1, 6)
-        ]
+    def test_gate_config_load_and_scan_region_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "rois.json"
-            save_rois(path, "camera-01", rois, 1280, 720)
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["coordinateSystem"], "normalized")
-            camera_id, loaded = load_rois(path)
-            self.assertEqual(camera_id, "camera-01")
-            self.assertEqual([roi.spot_id for roi in loaded], [roi.spot_id for roi in rois])
+            config_path = Path(directory) / "gate.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "gateId": "main-gate-01",
+                        "source": "0",
+                        "videoBackend": "dshow",
+                        "plateMode": "scan_zone",
+                        "scanRegion": [0.1, 0.2, 0.9, 0.85],
+                        "arduino": {"enabled": True, "port": "COM4", "openMs": 5000},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = load_gate_settings(config_path)
+            self.assertEqual(settings.gate_id, "main-gate-01")
+            self.assertEqual(settings.source, 0)
+            self.assertEqual(settings.scan_region, (0.1, 0.2, 0.9, 0.85))
+            self.assertEqual(settings.arduino.port, "COM4")
+
+            save_scan_region(config_path, (0.2, 0.3, 0.8, 0.75))
+            updated = load_gate_settings(config_path)
+            self.assertEqual(updated.scan_region, (0.2, 0.3, 0.8, 0.75))
+
+    def test_invalid_scan_region_or_mode_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "gate.json"
+            config_path.write_text(
+                json.dumps({"scanRegion": [0.8, 0.2, 0.2, 0.9]}), encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                load_gate_settings(config_path)
+
+            config_path.write_text(
+                json.dumps({"plateMode": "invalid_mode"}), encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                load_gate_settings(config_path)
 
 
 if __name__ == "__main__":

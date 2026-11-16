@@ -1,0 +1,44 @@
+{
+  "gateId": "main-gate-01",
+  "lotId": null,
+  "source": 0,
+  "videoBackend": "dshow",
+  "cameraName": null,
+  "yoloEnabled": true,
+  "yoloModel": "models/yolo11n.pt",
+  "yoloConfidence": 0.25,
+  "device": "cpu",
+  "imageSize": 640,
+  "plateMode": "scan_zone",
+  "plateModelPath": null,
+  "plateConfidence": 0.4,
+  "plateClassIds": [0],
+  "scanRegion": [0.15, 0.25, 0.85, 0.8],
+  "preferVehicleCrop": false,
+  "ocrIntervalSeconds": 0.35,
+  "cooldownSeconds": 15.0,
+  "apiUrl": "http://localhost:4000",
+  "preprocess": {
+    "scale": 2.0,
+    "grayscale": true,
+    "clahe": true,
+    "denoise": false,
+    "threshold": false,
+    "min_blur": 35.0
+  },
+  "ocr": {
+    "device": "cpu"
+  },
+  "consensus": {
+    "samples": 2,
+    "window": 5,
+    "ttl": 4.0,
+    "confidence": 0.65
+  },
+  "arduino": {
+    "enabled": true,
+    "port": "auto",
+    "baudrate": 9600,
+    "openMs": 5000
+  }
+}

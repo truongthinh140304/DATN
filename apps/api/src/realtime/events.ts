@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-export type RealtimeScope = "vision" | "parking" | "alerts";
+export type RealtimeScope = "gate" | "parking";
 export const realtimeEvents = new EventEmitter();
 
 // Deliberately send invalidations only: personal/recognition data still goes

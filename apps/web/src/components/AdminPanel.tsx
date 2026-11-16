@@ -1,8 +1,6 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import {
-  CircleParking,
   LoaderCircle,
-  MapPinned,
   Pencil,
   Plus,
   Save,
@@ -11,42 +9,24 @@ import {
   X,
 } from "lucide-react";
 import { apiRequest, friendlyError } from "../api";
-import type {
-  ParkingArea,
-  ParkingLot,
-  ParkingSpot,
-  SpotStatus,
-  User,
-  UserRole,
-} from "../types";
+import type { ParkingLot, User, UserRole } from "../types";
 
-type AdminSection = "users" | "lots" | "areas" | "spots";
+type AdminSection = "users" | "lots";
 
 type AdminPanelProps = {
   currentUserId: string;
   users: User[];
   lots: ParkingLot[];
-  areas: ParkingArea[];
-  spots: ParkingSpot[];
   onChanged: () => Promise<void>;
 };
-
-const spotStatusOptions: Array<{ value: SpotStatus; label: string }> = [
-  { value: "AVAILABLE", label: "Trống" },
-  { value: "RESERVED", label: "Đã đặt" },
-  { value: "OCCUPIED", label: "Đang có xe" },
-  { value: "INACTIVE", label: "Ngừng hoạt động" },
-];
 
 export function AdminPanel({
   currentUserId,
   users,
   lots,
-  areas,
-  spots,
   onChanged,
 }: AdminPanelProps) {
-  const [section, setSection] = useState<AdminSection>("users");
+  const [section, setSection] = useState<AdminSection>("lots");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -68,32 +48,18 @@ export function AdminPanel({
 
   const sections = [
     {
+      id: "lots" as const,
+      label: "Bãi xe & Sức chứa",
+      detail: "Cấu hình tổng số chỗ từng bãi",
+      count: lots.length,
+      icon: Warehouse,
+    },
+    {
       id: "users" as const,
       label: "Người dùng",
       detail: "Tài khoản và phân quyền",
       count: users.length,
       icon: Users,
-    },
-    {
-      id: "lots" as const,
-      label: "Bãi xe",
-      detail: "Thông tin bãi đỗ",
-      count: lots.length,
-      icon: Warehouse,
-    },
-    {
-      id: "areas" as const,
-      label: "Khu vực",
-      detail: "Khu và tầng đỗ xe",
-      count: areas.length,
-      icon: MapPinned,
-    },
-    {
-      id: "spots" as const,
-      label: "Vị trí",
-      detail: "Trạng thái từng vị trí",
-      count: spots.length,
-      icon: CircleParking,
     },
   ];
 
@@ -101,7 +67,9 @@ export function AdminPanel({
     <>
       <div className="page-title">
         <h1>Quản trị hệ thống</h1>
-        <p>Quản lý tài khoản và cấu trúc bãi đỗ theo đúng quyền quản trị.</p>
+        <p>
+          Quản lý tài khoản và sức chứa bãi xe phục vụ kiểm soát cổng barie.
+        </p>
       </div>
 
       <section className="admin-grid" aria-label="Nhóm chức năng quản trị">
@@ -140,22 +108,6 @@ export function AdminPanel({
       )}
       {section === "lots" && (
         <LotsManager lots={lots} busy={busy} runAction={runAction} />
-      )}
-      {section === "areas" && (
-        <AreasManager
-          areas={areas}
-          lots={lots}
-          busy={busy}
-          runAction={runAction}
-        />
-      )}
-      {section === "spots" && (
-        <SpotsManager
-          spots={spots}
-          areas={areas}
-          busy={busy}
-          runAction={runAction}
-        />
       )}
     </>
   );
@@ -266,6 +218,7 @@ function LotsManager({
     name: "",
     address: "",
     description: "",
+    capacity: "20",
     isActive: true,
   });
 
@@ -275,18 +228,33 @@ function LotsManager({
       name: lot.name,
       address: lot.address,
       description: lot.description ?? "",
+      capacity: String(lot.capacity),
       isActive: lot.isActive,
     });
   }
 
   function reset() {
     setEditingId(null);
-    setForm({ name: "", address: "", description: "", isActive: true });
+    setForm({
+      name: "",
+      address: "",
+      description: "",
+      capacity: "20",
+      isActive: true,
+    });
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (form.name.trim().length < 2 || form.address.trim().length < 3) return;
+    const parsedCapacity = Number.parseInt(form.capacity, 10);
+    if (
+      form.name.trim().length < 2 ||
+      form.address.trim().length < 3 ||
+      !Number.isFinite(parsedCapacity) ||
+      parsedCapacity < 1
+    ) {
+      return;
+    }
     const ok = await runAction(
       () =>
         apiRequest(
@@ -297,6 +265,7 @@ function LotsManager({
               name: form.name.trim(),
               address: form.address.trim(),
               description: form.description.trim() || undefined,
+              capacity: parsedCapacity,
               isActive: form.isActive,
             }),
           },
@@ -310,12 +279,12 @@ function LotsManager({
     <ManagerLayout
       formTitle={editingId ? "Cập nhật bãi xe" : "Thêm bãi xe"}
       form={
-        <form className="inline-form" onSubmit={submit}>
+        <form className="inline-form" onSubmit={(e) => void submit(e)}>
           <TextField
             label="Tên bãi xe"
             value={form.name}
             onChange={(name) => setForm((current) => ({ ...current, name }))}
-            placeholder="Bãi xe khu giảng đường"
+            placeholder="Bãi xe trung tâm"
             required
           />
           <TextField
@@ -324,7 +293,17 @@ function LotsManager({
             onChange={(address) =>
               setForm((current) => ({ ...current, address }))
             }
-            placeholder="Khuôn viên trường"
+            placeholder="Cổng chính khuôn viên"
+            required
+          />
+          <TextField
+            label="Sức chứa tối đa (chỗ)"
+            type="number"
+            value={form.capacity}
+            onChange={(capacity) =>
+              setForm((current) => ({ ...current, capacity }))
+            }
+            placeholder="20"
             required
           />
           <TextField
@@ -364,6 +343,7 @@ function LotsManager({
                 key={lot.id}
                 title={lot.name}
                 detail={lot.address}
+                badge={`Còn ${lot.availableSlots}/${lot.capacity} chỗ`}
                 active={lot.isActive}
                 onEdit={() => edit(lot)}
               />
@@ -371,307 +351,6 @@ function LotsManager({
           </div>
         ) : (
           <AdminEmpty icon={Warehouse} text="Chưa có bãi xe." />
-        )
-      }
-    />
-  );
-}
-
-function AreasManager({
-  areas,
-  lots,
-  busy,
-  runAction,
-}: {
-  areas: ParkingArea[];
-  lots: ParkingLot[];
-  busy: boolean;
-  runAction: RunAction;
-}) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    lotId: lots[0]?.id ?? "",
-    code: "",
-    name: "",
-    floor: "",
-    isActive: true,
-  });
-
-  function edit(area: ParkingArea) {
-    setEditingId(area.id);
-    setForm({
-      lotId: area.lotId,
-      code: area.code,
-      name: area.name,
-      floor: area.floor?.toString() ?? "",
-      isActive: area.isActive,
-    });
-  }
-
-  function reset() {
-    setEditingId(null);
-    setForm({
-      lotId: lots[0]?.id ?? "",
-      code: "",
-      name: "",
-      floor: "",
-      isActive: true,
-    });
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!form.lotId || !form.code.trim() || !form.name.trim()) return;
-    const ok = await runAction(
-      () =>
-        apiRequest(
-          editingId ? `/api/parking/areas/${editingId}` : "/api/parking/areas",
-          {
-            method: editingId ? "PATCH" : "POST",
-            body: JSON.stringify({
-              lotId: form.lotId,
-              code: form.code.trim(),
-              name: form.name.trim(),
-              floor: form.floor === "" ? undefined : Number(form.floor),
-              isActive: form.isActive,
-            }),
-          },
-        ),
-      editingId ? "Đã cập nhật khu vực." : "Đã thêm khu vực.",
-    );
-    if (ok) reset();
-  }
-
-  return (
-    <ManagerLayout
-      formTitle={editingId ? "Cập nhật khu vực" : "Thêm khu vực"}
-      form={
-        <form className="inline-form" onSubmit={submit}>
-          <SelectField
-            label="Bãi xe"
-            value={form.lotId}
-            onChange={(lotId) => setForm((current) => ({ ...current, lotId }))}
-            options={lots.map((lot) => ({ value: lot.id, label: lot.name }))}
-            placeholder="Chọn bãi xe"
-          />
-          <div className="form-split">
-            <TextField
-              label="Mã khu"
-              value={form.code}
-              onChange={(code) =>
-                setForm((current) => ({ ...current, code: code.toUpperCase() }))
-              }
-              placeholder="A"
-              required
-            />
-            <TextField
-              label="Tầng"
-              value={form.floor}
-              onChange={(floor) =>
-                setForm((current) => ({ ...current, floor }))
-              }
-              placeholder="1"
-              type="number"
-            />
-          </div>
-          <TextField
-            label="Tên khu vực"
-            value={form.name}
-            onChange={(name) => setForm((current) => ({ ...current, name }))}
-            placeholder="Khu A"
-            required
-          />
-          <label className="status-toggle form-toggle">
-            <input
-              type="checkbox"
-              checked={form.isActive}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  isActive: event.target.checked,
-                }))
-              }
-            />
-            <span>Khu vực đang hoạt động</span>
-          </label>
-          <FormActions
-            busy={busy}
-            editing={Boolean(editingId)}
-            onCancel={reset}
-          />
-        </form>
-      }
-      listTitle="Danh sách khu vực"
-      list={
-        areas.length ? (
-          <div className="management-list">
-            {areas.map((area) => (
-              <ManagementRow
-                key={area.id}
-                title={`${area.code} · ${area.name}`}
-                detail={`${area.lot?.name ?? "Bãi xe"}${area.floor ? ` · Tầng ${area.floor}` : ""}`}
-                active={area.isActive}
-                onEdit={() => edit(area)}
-              />
-            ))}
-          </div>
-        ) : (
-          <AdminEmpty icon={MapPinned} text="Chưa có khu vực." />
-        )
-      }
-    />
-  );
-}
-
-function SpotsManager({
-  spots,
-  areas,
-  busy,
-  runAction,
-}: {
-  spots: ParkingSpot[];
-  areas: ParkingArea[];
-  busy: boolean;
-  runAction: RunAction;
-}) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<{
-    areaId: string;
-    code: string;
-    status: SpotStatus;
-    isActive: boolean;
-  }>({
-    areaId: areas[0]?.id ?? "",
-    code: "",
-    status: "AVAILABLE",
-    isActive: true,
-  });
-
-  const sortedSpots = useMemo(
-    () => [...spots].sort((a, b) => a.code.localeCompare(b.code, "vi")),
-    [spots],
-  );
-
-  function edit(spot: ParkingSpot) {
-    setEditingId(spot.id);
-    setForm({
-      areaId: spot.areaId,
-      code: spot.code,
-      status: spot.status,
-      isActive: spot.isActive,
-    });
-  }
-
-  function reset() {
-    setEditingId(null);
-    setForm({
-      areaId: areas[0]?.id ?? "",
-      code: "",
-      status: "AVAILABLE",
-      isActive: true,
-    });
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!form.areaId || !form.code.trim()) return;
-    const ok = await runAction(
-      () =>
-        apiRequest(
-          editingId ? `/api/parking/spots/${editingId}` : "/api/parking/spots",
-          {
-            method: editingId ? "PATCH" : "POST",
-            body: JSON.stringify({
-              areaId: form.areaId,
-              code: form.code.trim(),
-              status: form.status,
-              isActive: form.isActive,
-            }),
-          },
-        ),
-      editingId ? "Đã cập nhật vị trí." : "Đã thêm vị trí.",
-    );
-    if (ok) reset();
-  }
-
-  return (
-    <ManagerLayout
-      formTitle={editingId ? "Cập nhật vị trí" : "Thêm vị trí"}
-      form={
-        <form className="inline-form" onSubmit={submit}>
-          <SelectField
-            label="Khu vực"
-            value={form.areaId}
-            onChange={(areaId) =>
-              setForm((current) => ({ ...current, areaId }))
-            }
-            options={areas.map((area) => ({
-              value: area.id,
-              label: `${area.code} · ${area.name}`,
-            }))}
-            placeholder="Chọn khu vực"
-          />
-          <TextField
-            label="Mã vị trí"
-            value={form.code}
-            onChange={(code) =>
-              setForm((current) => ({ ...current, code: code.toUpperCase() }))
-            }
-            placeholder="A05"
-            required
-          />
-          <SelectField
-            label="Trạng thái"
-            value={form.status}
-            onChange={(status) =>
-              setForm((current) => ({
-                ...current,
-                status: status as SpotStatus,
-              }))
-            }
-            options={spotStatusOptions}
-          />
-          <label className="status-toggle form-toggle">
-            <input
-              type="checkbox"
-              checked={form.isActive}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  isActive: event.target.checked,
-                }))
-              }
-            />
-            <span>Cho phép sử dụng vị trí</span>
-          </label>
-          <FormActions
-            busy={busy}
-            editing={Boolean(editingId)}
-            onCancel={reset}
-          />
-        </form>
-      }
-      listTitle="Danh sách vị trí"
-      list={
-        sortedSpots.length ? (
-          <div className="management-list">
-            {sortedSpots.map((spot) => (
-              <ManagementRow
-                key={spot.id}
-                title={spot.code}
-                detail={`${spot.area.lot.name} · ${spot.area.name}`}
-                active={spot.isActive}
-                badge={
-                  spotStatusOptions.find(
-                    (option) => option.value === spot.status,
-                  )?.label
-                }
-                onEdit={() => edit(spot)}
-              />
-            ))}
-          </div>
-        ) : (
-          <AdminEmpty icon={CircleParking} text="Chưa có vị trí đỗ." />
         )
       }
     />
@@ -790,39 +469,12 @@ function TextField({
       <span>{label}</span>
       <input
         type={type}
+        min={type === "number" ? 1 : undefined}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         required={required}
       />
-    </label>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  placeholder?: string;
-}) {
-  return (
-    <label className="select-field">
-      <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {placeholder && <option value="">{placeholder}</option>}
-        {options.map((option) => (
-          <option value={option.value} key={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
     </label>
   );
 }

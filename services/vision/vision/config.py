@@ -1,129 +1,131 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from .domain import ParkingRoi
-from .geometry import is_simple_polygon
-
-
-@dataclass(frozen=True)
-class VisionSettings:
-    camera_id: str
-    source: str | int
-    roi_config: Path
-    model: str = "yolo11n.pt"
-    device: str = "cpu"
-    image_size: int = 640
-    detector_confidence: float = 0.15
-    report_interval_seconds: float = 2.0
-    api_url: str = "http://localhost:4000"
-    api_key: str = ""
-    plate_config: Path | None = None
-    video_backend: str = "auto"
-    camera_name: str | None = None
 
 
 def parse_source(value: str | int) -> str | int:
     if isinstance(value, int):
         return value
-    stripped = value.strip()
+    stripped = str(value).strip()
     return int(stripped) if stripped.isdigit() else stripped
 
 
-def load_settings(path: str | Path) -> VisionSettings:
+@dataclass(frozen=True)
+class ArduinoSettings:
+    enabled: bool = True
+    port: str = "auto"
+    baudrate: int = 9600
+    open_ms: int = 5000
+
+
+@dataclass(frozen=True)
+class GateSettings:
+    gate_id: str
+    lot_id: str | None = None
+    source: str | int = 0
+    video_backend: str = "dshow"
+    camera_name: str | None = None
+    yolo_enabled: bool = True
+    yolo_model: str = "models/yolo11n.pt"
+    yolo_confidence: float = 0.25
+    device: str = "cpu"
+    image_size: int = 640
+    plate_mode: str = "scan_zone"
+    plate_model_path: Path | None = None
+    plate_confidence: float = 0.4
+    plate_class_ids: tuple[int, ...] = (0,)
+    scan_region: tuple[float, float, float, float] = (0.15, 0.25, 0.85, 0.80)
+    prefer_vehicle_crop: bool = False
+    ocr_interval_seconds: float = 0.35
+    cooldown_seconds: float = 15.0
+    api_url: str = "http://localhost:4000"
+    api_key: str = ""
+    preprocess: dict[str, Any] = field(default_factory=dict)
+    ocr: dict[str, Any] = field(default_factory=dict)
+    consensus: dict[str, Any] = field(default_factory=dict)
+    arduino: ArduinoSettings = field(default_factory=ArduinoSettings)
+
+
+def _validate_region(region: list[float] | tuple[float, ...]) -> tuple[float, float, float, float]:
+    if (
+        len(region) != 4
+        or not all(0.0 <= float(value) <= 1.0 for value in region)
+        or float(region[2]) <= float(region[0])
+        or float(region[3]) <= float(region[1])
+    ):
+        raise ValueError("scanRegion must be normalized [x1, y1, x2, y2] in 0..1")
+    return tuple(float(value) for value in region)  # type: ignore[return-value]
+
+
+def load_gate_settings(path: str | Path) -> GateSettings:
     config_path = Path(path).resolve()
     payload = json.loads(config_path.read_text(encoding="utf-8"))
-    backend = payload.get("videoBackend", "auto")
+
+    backend = str(payload.get("videoBackend", "dshow"))
     if backend not in {"auto", "dshow", "msmf"}:
         raise ValueError("videoBackend must be auto, dshow or msmf")
-    roi_path = Path(payload["roiConfig"])
-    if not roi_path.is_absolute():
-        roi_path = (config_path.parent / roi_path).resolve()
-    return VisionSettings(
-        camera_id=str(payload["cameraId"]),
+
+    plate_mode = str(payload.get("plateMode", "scan_zone"))
+    if plate_mode not in {"scan_zone", "model", "full_frame"}:
+        raise ValueError("plateMode must be scan_zone, model or full_frame")
+
+    plate_model_raw = payload.get("plateModelPath")
+    plate_model_path = None
+    if plate_model_raw:
+        candidate = Path(str(plate_model_raw))
+        plate_model_path = (
+            candidate if candidate.is_absolute() else (config_path.parent / candidate).resolve()
+        )
+
+    arduino_raw = payload.get("arduino", {}) or {}
+    arduino = ArduinoSettings(
+        enabled=bool(arduino_raw.get("enabled", True)),
+        port=str(arduino_raw.get("port", "auto")),
+        baudrate=int(arduino_raw.get("baudrate", 9600)),
+        open_ms=int(arduino_raw.get("openMs", 5000)),
+    )
+
+    yolo_model_raw = str(payload.get("yoloModel", "models/yolo11n.pt"))
+    yolo_candidate = (config_path.parent.parent / yolo_model_raw).resolve()
+    yolo_model = str(yolo_candidate) if yolo_candidate.is_file() else yolo_model_raw
+
+    return GateSettings(
+        gate_id=str(payload.get("gateId", "main-gate-01")),
+        lot_id=str(payload["lotId"]).strip() if payload.get("lotId") else None,
         source=parse_source(payload.get("source", 0)),
-        roi_config=roi_path,
-        model=str(payload.get("model", "yolo11n.pt")),
-        device=str(payload.get("device", "cpu")),
-        image_size=int(payload.get("imageSize", 640)),
-        detector_confidence=float(payload.get("detectorConfidence", 0.15)),
-        report_interval_seconds=float(payload.get("reportIntervalSeconds", 2.0)),
-        api_url=str(payload.get("apiUrl", "http://localhost:4000")),
-        api_key=str(payload.get("apiKey", "")),
-        plate_config=(config_path.parent / payload["plateConfig"]).resolve()
-        if payload.get("plateConfig")
-        else None,
         video_backend=backend,
         camera_name=payload.get("cameraName") or None,
+        yolo_enabled=bool(payload.get("yoloEnabled", True)),
+        yolo_model=yolo_model,
+        yolo_confidence=float(payload.get("yoloConfidence", 0.25)),
+        device=str(payload.get("device", "cpu")),
+        image_size=int(payload.get("imageSize", 640)),
+        plate_mode=plate_mode,
+        plate_model_path=plate_model_path,
+        plate_confidence=float(payload.get("plateConfidence", 0.4)),
+        plate_class_ids=tuple(int(x) for x in payload.get("plateClassIds", [0])),
+        scan_region=_validate_region(payload.get("scanRegion", [0.15, 0.25, 0.85, 0.80])),
+        prefer_vehicle_crop=bool(payload.get("preferVehicleCrop", False)),
+        ocr_interval_seconds=float(payload.get("ocrIntervalSeconds", 0.35)),
+        cooldown_seconds=float(payload.get("cooldownSeconds", 15.0)),
+        api_url=str(payload.get("apiUrl", "http://localhost:4000")),
+        api_key=str(payload.get("apiKey", "")),
+        preprocess=dict(payload.get("preprocess", {}) or {}),
+        ocr=dict(payload.get("ocr", {}) or {}),
+        consensus=dict(payload.get("consensus", {}) or {}),
+        arduino=arduino,
     )
 
 
-def load_rois(path: str | Path) -> tuple[str, list[ParkingRoi]]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    camera_id = str(payload["cameraId"])
-    rois: list[ParkingRoi] = []
-    seen_codes: set[str] = set()
-    seen_ids: set[str] = set()
-    for item in payload["spots"]:
-        code = str(item["code"]).strip().upper()
-        spot_id = str(item["spotId"]).strip()
-        polygon = tuple((float(x), float(y)) for x, y in item["polygon"])
-        if len(polygon) < 3:
-            raise ValueError(f"ROI {code} must contain at least 3 points")
-        if not is_simple_polygon(polygon):
-            raise ValueError(
-                f"ROI {code} has crossing edges, duplicate points or zero area; recalibrate with vision:setup"
-            )
-        if any(not (0 <= x <= 1 and 0 <= y <= 1) for x, y in polygon):
-            raise ValueError(f"ROI {code} must use normalized coordinates 0..1")
-        if code in seen_codes or spot_id in seen_ids:
-            raise ValueError(f"Duplicate ROI mapping for {code}")
-        seen_codes.add(code)
-        seen_ids.add(spot_id)
-        rois.append(ParkingRoi(spot_id=spot_id, code=code, polygon=polygon))
-    if not rois:
-        raise ValueError("At least one parking ROI is required")
-    return camera_id, rois
-
-
-def save_rois(
-    path: str | Path,
-    camera_id: str,
-    rois: list[ParkingRoi],
-    frame_width: int,
-    frame_height: int,
+def save_scan_region(
+    path: str | Path, region: tuple[float, float, float, float]
 ) -> None:
-    payload: dict[str, Any] = {
-        "version": 1,
-        "cameraId": camera_id,
-        "coordinateSystem": "normalized",
-        "referenceFrame": {"width": frame_width, "height": frame_height},
-        "spots": [
-            {
-                "spotId": roi.spot_id,
-                "code": roi.code,
-                "polygon": [[round(x, 6), round(y, 6)] for x, y in roi.polygon],
-            }
-            for roi in rois
-        ],
-    }
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    config_path = Path(path).resolve()
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["scanRegion"] = [round(value, 4) for value in _validate_region(region)]
+    config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-
-
-def to_pixel_rois(rois: list[ParkingRoi], width: int, height: int) -> list[ParkingRoi]:
-    return [
-        ParkingRoi(
-            spot_id=roi.spot_id,
-            code=roi.code,
-            polygon=tuple((x * width, y * height) for x, y in roi.polygon),
-        )
-        for roi in rois
-    ]

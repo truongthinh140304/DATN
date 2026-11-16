@@ -5,7 +5,9 @@ artifacts/
 test-results/
 playwright-report/
 services/vision/output/
+services/vision/config/gate.json
 services/vision/config/vision.json
 services/vision/config/parking_rois.json
 services/vision/config/spots.json
 services/vision/config/plates.json
+services/vision/config/*.bak

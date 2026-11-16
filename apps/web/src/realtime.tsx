@@ -9,8 +9,8 @@ import { io } from "socket.io-client";
 import { API_BASE_URL, getAccessToken } from "./api";
 import { useAuth } from "./auth";
 
-type Scope = "vision" | "parking" | "alerts";
-const initial = { vision: 0, parking: 0, alerts: 0 };
+type Scope = "gate" | "parking";
+const initial = { gate: 0, parking: 0 };
 const Context = createContext({ status: "offline", revision: initial });
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
@@ -35,9 +35,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       setStatus("connected");
       // Every reconnect refetches REST snapshots; missed events are not replayed.
       setRevision((value) => ({
-        vision: value.vision + 1,
+        gate: value.gate + 1,
         parking: value.parking + 1,
-        alerts: value.alerts + 1,
       }));
     });
     socket.on("disconnect", () => setStatus("offline"));
@@ -53,7 +52,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       window.dispatchEvent(new Event("auth:expired")),
     );
     socket.on("data:changed", (event: { scope?: Scope }) => {
-      if (event.scope && ["vision", "parking", "alerts"].includes(event.scope))
+      if (event.scope && ["gate", "parking"].includes(event.scope))
         setRevision((value) => ({
           ...value,
           [event.scope!]: value[event.scope!] + 1,

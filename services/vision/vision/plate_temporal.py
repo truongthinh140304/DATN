@@ -9,10 +9,10 @@ from .plate_text import plausible_plate
 class PlateConsensus:
     def __init__(
         self,
-        samples: int = 3,
-        window: int = 7,
-        ttl: float = 3.0,
-        confidence: float = 0.7,
+        samples: int = 2,
+        window: int = 5,
+        ttl: float = 4.0,
+        confidence: float = 0.65,
     ):
         if not 1 <= samples <= window or ttl <= 0 or not 0 <= confidence <= 1:
             raise ValueError("Invalid consensus settings")

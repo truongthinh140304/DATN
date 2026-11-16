@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
-import { CarFront, CheckCircle2, CircleParking, Clock3 } from "lucide-react";
+import {
+  CarFront,
+  CheckCircle2,
+  CircleParking,
+  ShieldCheck,
+} from "lucide-react";
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
@@ -13,41 +18,55 @@ export function AuthLayout({ children }: { children: ReactNode }) {
             <span>Smart Parking</span>
           </a>
           {children}
-          <p className="auth-footer">Hệ thống quản lý bãi đỗ xe thông minh</p>
+          <p className="auth-footer">
+            Hệ thống kiểm soát cổng &amp; bãi đỗ xe thông minh
+          </p>
         </div>
       </section>
 
-      <aside className="auth-visual" aria-label="Minh họa trạng thái bãi đỗ xe">
+      <aside className="auth-visual" aria-label="Minh họa kiểm soát cổng barie">
         <div className="visual-content">
-          <p className="visual-kicker">QUẢN LÝ TẬP TRUNG</p>
-          <h2>Nắm rõ từng vị trí, chủ động mỗi hành trình.</h2>
+          <p className="visual-kicker">CỔNG TỰ ĐỘNG · OCR</p>
+          <h2>Đặt chỗ theo biển số, qua cổng không chạm.</h2>
           <p>
-            Theo dõi sức chứa, đặt chỗ và quản lý phương tiện trong một không
-            gian rõ ràng.
+            Đăng ký phương tiện và giữ suất đậu theo bãi xe. Camera tại cổng tự
+            động nhận diện biển số và điều khiển barie.
           </p>
 
           <div className="parking-preview">
             <div className="parking-preview-head">
-              <span>Khu A · Tầng 1</span>
-              <span>4 vị trí</span>
+              <span>Cổng chính · Bãi xe trung tâm</span>
+              <span>Sẵn sàng</span>
             </div>
             <div className="preview-grid">
-              <PreviewSpot code="A01" state="available" label="Trống" />
-              <PreviewSpot code="A02" state="reserved" label="Đã đặt" />
-              <PreviewSpot code="A03" state="occupied" label="Có xe" />
-              <PreviewSpot code="A04" state="available" label="Trống" />
+              <PreviewTile
+                code="Camera"
+                state="available"
+                label="Quét biển số"
+              />
+              <PreviewTile
+                code="30A-12345"
+                state="reserved"
+                label="Khớp đặt chỗ"
+              />
+              <PreviewTile code="Barie" state="available" label="Mở cổng 5s" />
+              <PreviewTile
+                code="Còn chỗ"
+                state="occupied"
+                label="14 / 20 suất"
+              />
             </div>
           </div>
 
           <div className="preview-legend">
             <span>
-              <CheckCircle2 aria-hidden /> Trống
+              <CheckCircle2 aria-hidden /> Tự động check-in / out
             </span>
             <span>
-              <Clock3 aria-hidden /> Đã đặt
+              <ShieldCheck aria-hidden /> Khớp biển số hợp lệ
             </span>
             <span>
-              <CarFront aria-hidden /> Đang có xe
+              <CarFront aria-hidden /> Barie Arduino Uno
             </span>
           </div>
         </div>
@@ -56,7 +75,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
   );
 }
 
-function PreviewSpot({
+function PreviewTile({
   code,
   state,
   label,

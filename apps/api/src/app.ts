@@ -11,8 +11,7 @@ import { vehiclesRouter } from "./modules/vehicles/vehicles.routes.js";
 import { parkingRouter } from "./modules/parking/parking.routes.js";
 import { reservationsRouter } from "./modules/reservations/reservations.routes.js";
 import { sessionsRouter } from "./modules/sessions/sessions.routes.js";
-import { visionRouter } from "./modules/vision/vision.routes.js";
-import { alertsRouter } from "./modules/vision/alerts.routes.js";
+import { gateRouter } from "./modules/gate/gate.routes.js";
 import { publishRealtime } from "./realtime/events.js";
 
 export const app = express();
@@ -46,8 +45,7 @@ app.use("/api/vehicles", vehiclesRouter);
 app.use("/api/parking", parkingRouter);
 app.use("/api/reservations", reservationsRouter);
 app.use("/api/sessions", sessionsRouter);
-app.use("/api/vision", visionRouter);
-app.use("/api/vision/alerts", alertsRouter);
+app.use("/api/gate", gateRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: { message: "Route not found" } });

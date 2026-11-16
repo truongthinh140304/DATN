@@ -1,8 +1,8 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../src/app.js";
-import { prisma } from "../src/config/prisma.js";
 import { env } from "../src/config/env.js";
+import { prisma } from "../src/config/prisma.js";
 
 const runDbTests =
   process.env.RUN_DB_TESTS === "true" ? describe : describe.skip;
@@ -10,8 +10,11 @@ const runDbTests =
 const testEmails = ["user-test@example.com", "admin-test@example.com"];
 
 async function cleanupTestData() {
-  await prisma.cameraObservation.deleteMany({
-    where: { cameraId: "test-camera" },
+  await prisma.gateCommand.deleteMany({
+    where: { gateId: "gate-test-01" },
+  });
+  await prisma.gateEvent.deleteMany({
+    where: { gateId: "gate-test-01" },
   });
   await prisma.auditLog.deleteMany({
     where: { actor: { email: { in: testEmails } } },
@@ -23,20 +26,23 @@ async function cleanupTestData() {
     where: {
       OR: [
         { user: { email: { in: testEmails } } },
-        { spot: { area: { lot: { name: "Lot Test" } } } },
+        { lot: { name: "Lot Test" } },
       ],
     },
   });
-  await prisma.vehicle.deleteMany({ where: { plateNumber: "30A-99999" } });
+  await prisma.vehicle.deleteMany({
+    where: { plateNormalized: { in: ["30A99999", "30A88888"] } },
+  });
   await prisma.parkingLot.deleteMany({ where: { name: "Lot Test" } });
   await prisma.user.deleteMany({ where: { email: { in: testEmails } } });
 }
 
-runDbTests("smart parking API", () => {
+runDbTests("smart parking gate barrier API", () => {
   let userToken = "";
   let adminToken = "";
-  let vehicleId = "";
-  let spotId = "";
+  let vehicleId1 = "";
+  let vehicleId2 = "";
+  let lotId = "";
 
   beforeAll(cleanupTestData);
   afterAll(cleanupTestData);
@@ -79,150 +85,151 @@ runDbTests("smart parking API", () => {
     expect(ok.status).toBe(200);
   });
 
-  it("creates vehicle and parking structure", async () => {
-    const vehicle = await request(app)
+  it("creates vehicles with unique normalized plates and lot capacity", async () => {
+    const v1 = await request(app)
       .post("/api/vehicles")
       .set("Authorization", `Bearer ${userToken}`)
-      .send({ plateNumber: "30A-99999", type: "CAR" });
-    expect(vehicle.status).toBe(201);
-    vehicleId = vehicle.body.vehicle.id;
+      .send({ plateNumber: "30a-999.99", type: "CAR" });
+    expect(v1.status).toBe(201);
+    expect(v1.body.vehicle.plateNormalized).toBe("30A99999");
+    vehicleId1 = v1.body.vehicle.id;
+
+    const duplicate = await request(app)
+      .post("/api/vehicles")
+      .set("Authorization", `Bearer ${userToken}`)
+      .send({ plateNumber: "30A99999", type: "CAR" });
+    expect(duplicate.status).toBe(409);
+
+    const v2 = await request(app)
+      .post("/api/vehicles")
+      .set("Authorization", `Bearer ${userToken}`)
+      .send({ plateNumber: "30A-88888", type: "CAR" });
+    expect(v2.status).toBe(201);
+    vehicleId2 = v2.body.vehicle.id;
 
     const lot = await request(app)
       .post("/api/parking/lots")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ name: "Lot Test", address: "Campus" });
-    const area = await request(app)
-      .post("/api/parking/areas")
-      .set("Authorization", `Bearer ${adminToken}`)
-      .send({ lotId: lot.body.lot.id, code: "B", name: "Area B" });
-    const spot = await request(app)
-      .post("/api/parking/spots")
-      .set("Authorization", `Bearer ${adminToken}`)
-      .send({ areaId: area.body.area.id, code: "B01" });
-    expect(spot.status).toBe(201);
-    spotId = spot.body.spot.id;
+      .send({ name: "Lot Test", address: "Campus Gate", capacity: 1 });
+    expect(lot.status).toBe(201);
+    expect(lot.body.lot.capacity).toBe(1);
+    lotId = lot.body.lot.id;
   });
 
-  it("authenticates and stores camera observations without changing spot status", async () => {
-    const observation = {
-      cameraId: "test-camera",
-      spotId,
-      occupancyStatus: "OCCUPIED",
-      confidence: 0.91,
-      timestamp: new Date().toISOString(),
-    };
-
-    const unauthorized = await request(app)
-      .post("/api/vision/observations")
-      .send(observation);
-    expect(unauthorized.status).toBe(401);
-
-    const accepted = await request(app)
-      .post("/api/vision/observations")
-      .set("x-vision-api-key", env.VISION_API_KEY)
-      .send(observation);
-    expect(accepted.status).toBe(202);
-    expect(accepted.body.accepted).toBe(1);
-
-    const spot = await prisma.parkingSpot.findUniqueOrThrow({
-      where: { id: spotId },
-    });
-    expect(spot.status).toBe("AVAILABLE");
-  });
-
-  it("prevents two valid reservations on the same spot", async () => {
+  it("enforces lot capacity atomically on reservations", async () => {
     const first = await request(app)
       .post("/api/reservations")
       .set("Authorization", `Bearer ${userToken}`)
-      .send({ vehicleId, spotId });
+      .send({ vehicleId: vehicleId1, lotId });
     expect(first.status).toBe(201);
 
     const second = await request(app)
       .post("/api/reservations")
       .set("Authorization", `Bearer ${userToken}`)
-      .send({ vehicleId, spotId });
+      .send({ vehicleId: vehicleId2, lotId });
     expect(second.status).toBe(409);
   });
 
-  it("stores all four plate match outcomes without modifying business state", async () => {
-    const reservation = await prisma.reservation.findFirstOrThrow({
-      where: { spotId, status: "CONFIRMED" },
-    });
-    const observation = {
-      cameraId: "test-camera",
-      spotId,
-      timestamp: new Date(reservation.startsAt.getTime() + 100).toISOString(),
-      occupancyStatus: "OCCUPIED",
-      confidence: 0.9,
-      recognitionStatus: "READ",
-      plateRaw: "30a-999.99",
-      plateNormalized: "CLIENT_WRONG",
-      ocrConfidence: 0.9,
-      vehicleConfidence: 0.9,
-      associationConfidence: 0.8,
+  it("authenticates gate camera and automates entry, cooldown, and exit", async () => {
+    const unauth = await request(app).post("/api/gate/scan").send({
+      gateId: "gate-test-01",
+      lotId,
+      plateRaw: "30A-99999",
+      ocrConfidence: 0.95,
       plateSamples: 3,
-    };
-    const result = await request(app)
-      .post("/api/vision/observations")
+    });
+    expect(unauth.status).toBe(401);
+
+    const denyOther = await request(app)
+      .post("/api/gate/scan")
       .set("x-vision-api-key", env.VISION_API_KEY)
       .send({
-        observations: [
-          observation,
-          { ...observation, plateRaw: "51B-12345" },
-          { ...observation, timestamp: reservation.expiresAt.toISOString() },
-          { ...observation, recognitionStatus: "AMBIGUOUS" },
-        ],
+        gateId: "gate-test-01",
+        lotId,
+        plateRaw: "30A-88888",
+        ocrConfidence: 0.95,
+        plateSamples: 3,
       });
-    expect(result.status).toBe(202);
-    expect(result.body.accepted).toBe(4);
-    const rows = await prisma.cameraObservation.findMany({
-      where: {
-        cameraId: "test-camera",
-        recognitionStatus: { not: "NOT_REQUESTED" },
-      },
+    expect(denyOther.status).toBe(200);
+    expect(denyOther.body.decision).toBe("DENY");
+    expect(denyOther.body.barrierAction).toBe("STAY_CLOSED");
+
+    const entryTime = new Date();
+    const allowEntry = await request(app)
+      .post("/api/gate/scan")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({
+        gateId: "gate-test-01",
+        lotId,
+        plateRaw: "30A-99999",
+        ocrConfidence: 0.95,
+        plateSamples: 3,
+        timestamp: entryTime.toISOString(),
+      });
+    expect(allowEntry.status).toBe(200);
+    expect(allowEntry.body).toMatchObject({
+      direction: "ENTRY",
+      decision: "ALLOW",
+      barrierAction: "OPEN",
+      businessMutated: true,
     });
-    expect(rows.map((row) => row.matchStatus).sort()).toEqual([
-      "INSUFFICIENT",
-      "MATCH",
-      "MISMATCH",
-      "NO_RESERVATION",
-    ]);
-    expect(rows.find((row) => row.matchStatus === "MATCH")).toMatchObject({
-      plateNormalized: "30A99999",
-      reservationId: reservation.id,
+
+    const cooldown = await request(app)
+      .post("/api/gate/scan")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({
+        gateId: "gate-test-01",
+        lotId,
+        plateRaw: "30A-99999",
+        ocrConfidence: 0.95,
+        plateSamples: 3,
+        timestamp: new Date(entryTime.getTime() + 3000).toISOString(),
+      });
+    expect(cooldown.status).toBe(200);
+    expect(cooldown.body.decision).toBe("COOLDOWN");
+    expect(cooldown.body.barrierAction).toBe("STAY_CLOSED");
+
+    const allowExit = await request(app)
+      .post("/api/gate/scan")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({
+        gateId: "gate-test-01",
+        lotId,
+        plateRaw: "30A-99999",
+        ocrConfidence: 0.95,
+        plateSamples: 3,
+        timestamp: new Date(
+          entryTime.getTime() + (env.GATE_REENTRY_COOLDOWN_SECONDS + 5) * 1000,
+        ).toISOString(),
+      });
+    expect(allowExit.status).toBe(200);
+    expect(allowExit.body).toMatchObject({
+      direction: "EXIT",
+      decision: "ALLOW",
+      barrierAction: "OPEN",
+      businessMutated: true,
     });
-    expect(
-      (await prisma.parkingSpot.findUniqueOrThrow({ where: { id: spotId } }))
-        .status,
-    ).toBe("RESERVED");
-    expect(
-      (
-        await prisma.reservation.findUniqueOrThrow({
-          where: { id: reservation.id },
-        })
-      ).status,
-    ).toBe("CONFIRMED");
-    expect(await prisma.parkingSession.count({ where: { spotId } })).toBe(0);
   });
 
-  it("keeps manual check-in and check-out working after vision observations", async () => {
-    const reservation = await prisma.reservation.findFirstOrThrow({
-      where: { spotId, status: "CONFIRMED" },
-    });
-    const checkIn = await request(app)
-      .post("/api/sessions/check-in")
-      .set("Authorization", `Bearer ${userToken}`)
-      .send({ vehicleId, spotId, reservationId: reservation.id });
-    expect(checkIn.status).toBe(201);
-    const checkOut = await request(app)
-      .post(`/api/sessions/${checkIn.body.session.id}/check-out`)
-      .set("Authorization", `Bearer ${userToken}`)
-      .send({});
-    expect(checkOut.status).toBe(200);
-    expect(checkOut.body.session.status).toBe("COMPLETED");
-    expect(
-      (await prisma.parkingSpot.findUniqueOrThrow({ where: { id: spotId } }))
-        .status,
-    ).toBe("AVAILABLE");
+  it("queues and claims manual barrier open commands", async () => {
+    const manual = await request(app)
+      .post("/api/gate/manual-open")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ gateId: "gate-test-01", lotId, durationMs: 5000 });
+    expect(manual.status).toBe(201);
+
+    const claim1 = await request(app)
+      .post("/api/gate/commands/claim")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({ gateId: "gate-test-01" });
+    expect(claim1.status).toBe(200);
+    expect(claim1.body.command.command).toBe("OPEN");
+
+    const claim2 = await request(app)
+      .post("/api/gate/commands/claim")
+      .set("x-vision-api-key", env.VISION_API_KEY)
+      .send({ gateId: "gate-test-01" });
+    expect(claim2.status).toBe(200);
+    expect(claim2.body.command).toBeNull();
   });
 });

@@ -94,7 +94,7 @@ describe("authenticated WebSocket updates", () => {
     socket.connect();
     await connected;
     expect(socket.io.engine.transport.name).toBe("websocket");
-    for (const scope of ["vision", "parking", "alerts"] as const) {
+    for (const scope of ["gate", "parking"] as const) {
       const incoming = next(socket, "data:changed");
       publishRealtime(scope);
       expect(await incoming).toEqual({ scope, at: expect.any(String) });
@@ -104,8 +104,8 @@ describe("authenticated WebSocket updates", () => {
     socket.connect();
     await reconnected;
     const incoming = next(socket, "data:changed");
-    publishRealtime("vision");
-    expect(await incoming).toMatchObject({ scope: "vision" });
+    publishRealtime("gate");
+    expect(await incoming).toMatchObject({ scope: "gate" });
   });
   it("disconnects an already connected socket when its JWT expires", async () => {
     db.user.findUnique.mockResolvedValue({ id: "socket-user", isActive: true });

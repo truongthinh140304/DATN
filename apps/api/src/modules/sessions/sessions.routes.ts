@@ -4,12 +4,17 @@ import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { AppError, asyncHandler, pagination } from "../../utils/http.js";
 import { listQuery, uuidParam } from "../../utils/schemas.js";
+import {
+  expireStaleReservations,
+  getLotUsage,
+  lockParkingLot,
+} from "../parking/parking.service.js";
 
 export const sessionsRouter = Router();
 
 const checkInBody = z.object({
   vehicleId: z.string().uuid(),
-  spotId: z.string().uuid(),
+  lotId: z.string().uuid(),
   reservationId: z.string().uuid().optional(),
   notes: z.string().trim().max(500).optional(),
 });
@@ -34,7 +39,7 @@ sessionsRouter.get(
         take: page.take,
         include: {
           vehicle: true,
-          spot: { include: { area: { include: { lot: true } } } },
+          lot: true,
           reservation: true,
         },
         orderBy: { checkedInAt: "desc" },
@@ -50,19 +55,30 @@ sessionsRouter.post(
   asyncHandler(async (req, res) => {
     const body = checkInBody.parse(req.body);
     const session = await prisma.$transaction(async (tx) => {
+      const now = new Date();
       const vehicle = await tx.vehicle.findUniqueOrThrow({
         where: { id: body.vehicleId },
       });
       if (req.user!.role !== "ADMIN" && vehicle.ownerId !== req.user!.id)
         throw new AppError(403, "Vehicle does not belong to current user");
       if (!vehicle.isActive) throw new AppError(409, "Vehicle is inactive");
-      const spot = await tx.parkingSpot.findUniqueOrThrow({
-        where: { id: body.spotId },
-        include: { area: { include: { lot: true } } },
-      });
-      if (!spot.isActive || !spot.area.isActive || !spot.area.lot.isActive)
+
+      const lot = await lockParkingLot(tx, body.lotId);
+      if (!lot.isActive)
         throw new AppError(409, "Parking location is inactive");
-      const now = new Date();
+
+      await expireStaleReservations(tx, now, {
+        OR: [{ lotId: body.lotId }, { vehicleId: body.vehicleId }],
+      });
+
+      const activeSession = await tx.parkingSession.findFirst({
+        where: { vehicleId: body.vehicleId, status: "ACTIVE" },
+      });
+      if (activeSession)
+        throw new AppError(
+          409,
+          "Vehicle already has an active parking session",
+        );
 
       if (body.reservationId) {
         const reservation = await tx.reservation.findUniqueOrThrow({
@@ -70,11 +86,11 @@ sessionsRouter.post(
         });
         if (
           reservation.vehicleId !== body.vehicleId ||
-          reservation.spotId !== body.spotId
+          reservation.lotId !== body.lotId
         ) {
           throw new AppError(
             400,
-            "Reservation does not match vehicle and spot",
+            "Reservation does not match vehicle and parking lot",
           );
         }
         if (
@@ -84,6 +100,8 @@ sessionsRouter.post(
           reservation.userId !== vehicle.ownerId
         )
           throw new AppError(409, "Reservation is not valid for check-in");
+        if (reservation.paymentStatus === "UNPAID")
+          throw new AppError(409, "Reservation payment is required");
         const claimed = await tx.reservation.updateMany({
           where: {
             id: reservation.id,
@@ -91,48 +109,36 @@ sessionsRouter.post(
             startsAt: { lte: now },
             expiresAt: { gt: now },
           },
-          data: { status: "CHECKED_IN", checkedInAt: new Date() },
+          data: { status: "CHECKED_IN", checkedInAt: now },
         });
         if (claimed.count !== 1)
           throw new AppError(409, "Reservation has already changed");
-        const claimedSpot = await tx.parkingSpot.updateMany({
-          where: { id: body.spotId, isActive: true, status: "RESERVED" },
-          data: { status: "OCCUPIED" },
-        });
-        if (claimedSpot.count !== 1)
-          throw new AppError(
-            409,
-            "Reserved spot is no longer available for check-in",
-          );
       } else {
         const conflicting = await tx.reservation.findFirst({
           where: {
-            OR: [{ spotId: body.spotId }, { vehicleId: body.vehicleId }],
+            vehicleId: body.vehicleId,
             status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
           },
         });
         if (conflicting)
           throw new AppError(
             409,
-            "Vehicle or spot has an active reservation; select the reservation",
+            "Vehicle has an active reservation; select the reservation",
           );
-        const updatedSpot = await tx.parkingSpot.updateMany({
-          where: { id: body.spotId, isActive: true, status: "AVAILABLE" },
-          data: { status: "OCCUPIED" },
-        });
-        if (updatedSpot.count !== 1)
-          throw new AppError(409, "Spot is not available");
+        const usage = await getLotUsage(tx, body.lotId, lot.capacity, now);
+        if (usage.usedSlots >= lot.capacity)
+          throw new AppError(409, "Parking lot is full");
       }
 
       const created = await tx.parkingSession.create({
         data: {
           userId: vehicle.ownerId,
           vehicleId: body.vehicleId,
-          spotId: body.spotId,
+          lotId: body.lotId,
           reservationId: body.reservationId,
           notes: body.notes,
         },
-        include: { vehicle: true, spot: true, reservation: true },
+        include: { vehicle: true, lot: true, reservation: true },
       });
       await tx.auditLog.create({
         data: {
@@ -141,7 +147,7 @@ sessionsRouter.post(
           entityType: "ParkingSession",
           entityId: created.id,
           metadata: {
-            spotId: body.spotId,
+            lotId: body.lotId,
             vehicleId: body.vehicleId,
             reservationId: body.reservationId ?? null,
           },
@@ -165,41 +171,22 @@ sessionsRouter.post(
         throw new AppError(403, "Insufficient permission");
       if (current.status !== "ACTIVE")
         throw new AppError(409, "Session is already completed");
+      const now = new Date();
       const claimed = await tx.parkingSession.updateMany({
         where: { id, status: "ACTIVE" },
-        data: { status: "COMPLETED", checkedOutAt: new Date() },
+        data: { status: "COMPLETED", checkedOutAt: now },
       });
       if (claimed.count !== 1)
         throw new AppError(409, "Session has already changed");
-      const spot = await tx.parkingSpot.findUniqueOrThrow({
-        where: { id: current.spotId },
-        include: { area: { include: { lot: true } } },
-      });
-      if (spot.status !== "INACTIVE") {
-        const released = await tx.parkingSpot.updateMany({
-          where: { id: current.spotId, status: "OCCUPIED" },
-          data: {
-            status:
-              spot.isActive && spot.area.isActive && spot.area.lot.isActive
-                ? "AVAILABLE"
-                : "INACTIVE",
-          },
-        });
-        if (released.count !== 1)
-          throw new AppError(
-            409,
-            "Spot state is inconsistent with this session",
-          );
-      }
       if (current.reservationId) {
         const completed = await tx.reservation.updateMany({
           where: {
             id: current.reservationId,
             status: "CHECKED_IN",
             vehicleId: current.vehicleId,
-            spotId: current.spotId,
+            lotId: current.lotId,
           },
-          data: { status: "COMPLETED", completedAt: new Date() },
+          data: { status: "COMPLETED", completedAt: now },
         });
         if (completed.count !== 1)
           throw new AppError(
@@ -215,7 +202,10 @@ sessionsRouter.post(
           entityId: id,
         },
       });
-      return tx.parkingSession.findUniqueOrThrow({ where: { id } });
+      return tx.parkingSession.findUniqueOrThrow({
+        where: { id },
+        include: { vehicle: true, lot: true, reservation: true },
+      });
     });
     return res.json({ session });
   }),

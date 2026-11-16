@@ -18,13 +18,6 @@ enum VehicleType {
   OTHER
 }
 
-enum SpotStatus {
-  AVAILABLE
-  RESERVED
-  OCCUPIED
-  INACTIVE
-}
-
 enum ReservationStatus {
   PENDING
   CONFIRMED
@@ -34,43 +27,43 @@ enum ReservationStatus {
   COMPLETED
 }
 
+enum PaymentStatus {
+  NOT_REQUIRED
+  UNPAID
+  PAID
+}
+
 enum SessionStatus {
   ACTIVE
   COMPLETED
 }
 
-enum OccupancyStatus {
-  EMPTY
-  OCCUPIED
+enum GateDirection {
+  ENTRY
+  EXIT
   UNKNOWN
 }
 
-enum RecognitionStatus {
-  NOT_REQUESTED
-  NO_VEHICLE
-  UNREADABLE
-  READ
-  CAMERA_LOST
-  AMBIGUOUS
+enum GateEventSource {
+  CAMERA
+  MANUAL
 }
 
-enum ReservationMatchStatus {
-  MATCH
-  MISMATCH
-  NO_RESERVATION
-  INSUFFICIENT
+enum GateDecision {
+  ALLOW
+  DENY
+  COOLDOWN
 }
 
-enum VisionAlertType {
-  WRONG_SPOT
-  PLATE_MISMATCH
-  UNRESERVED_VEHICLE
-}
-
-enum VisionAlertStatus {
+enum BarrierAction {
   OPEN
-  ACKNOWLEDGED
-  RESOLVED
+  STAY_CLOSED
+}
+
+enum GateCommandStatus {
+  PENDING
+  EXECUTED
+  EXPIRED
 }
 
 model User {
@@ -93,15 +86,16 @@ model User {
 }
 
 model Vehicle {
-  id          String      @id @default(uuid()) @db.Uuid
-  ownerId     String      @map("owner_id") @db.Uuid
-  plateNumber String      @unique @map("plate_number")
-  type        VehicleType
-  brand       String?
-  color       String?
-  isActive    Boolean     @default(true) @map("is_active")
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
+  id              String      @id @default(uuid()) @db.Uuid
+  ownerId         String      @map("owner_id") @db.Uuid
+  plateNumber     String      @map("plate_number")
+  plateNormalized String      @unique @map("plate_normalized")
+  type            VehicleType @default(CAR)
+  brand           String?
+  color           String?
+  isActive        Boolean     @default(true) @map("is_active")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
 
   owner        User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   reservations Reservation[]
@@ -116,133 +110,41 @@ model ParkingLot {
   name        String
   address     String
   description String?
+  capacity    Int      @default(20)
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  areas ParkingArea[]
+  reservations Reservation[]
+  sessions     ParkingSession[]
+  gateEvents   GateEvent[]
 
   @@map("parking_lots")
 }
 
-model ParkingArea {
-  id        String   @id @default(uuid()) @db.Uuid
-  lotId     String   @map("lot_id") @db.Uuid
-  code      String
-  name      String
-  floor     Int?
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  lot   ParkingLot    @relation(fields: [lotId], references: [id], onDelete: Cascade)
-  spots ParkingSpot[]
-
-  @@unique([lotId, code])
-  @@index([lotId])
-  @@map("parking_areas")
-}
-
-model ParkingSpot {
-  id        String     @id @default(uuid()) @db.Uuid
-  areaId    String     @map("area_id") @db.Uuid
-  code      String
-  status    SpotStatus @default(AVAILABLE)
-  isActive  Boolean    @default(true) @map("is_active")
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
-
-  area               ParkingArea         @relation(fields: [areaId], references: [id], onDelete: Cascade)
-  reservations       Reservation[]
-  sessions           ParkingSession[]
-  cameraObservations CameraObservation[]
-  visionAlerts       VisionAlert[]
-
-  @@unique([areaId, code])
-  @@index([areaId])
-  @@index([status])
-  @@map("parking_spots")
-}
-
-model CameraObservation {
-  id                       String                 @id @default(uuid()) @db.Uuid
-  cameraId                 String                 @map("camera_id")
-  spotId                   String                 @map("spot_id") @db.Uuid
-  occupancyStatus          OccupancyStatus        @map("occupancy_status")
-  confidence               Float
-  observedAt               DateTime               @map("observed_at")
-  receivedAt               DateTime               @default(now()) @map("received_at")
-  metadata                 Json?
-  recognitionStatus        RecognitionStatus      @default(NOT_REQUESTED) @map("recognition_status")
-  plateRaw                 String?                @map("plate_raw")
-  plateNormalized          String?                @map("plate_normalized")
-  vehicleConfidence        Float?                 @map("vehicle_confidence")
-  plateDetectionConfidence Float?                 @map("plate_detection_confidence")
-  associationConfidence    Float?                 @map("association_confidence")
-  ocrConfidence            Float?                 @map("ocr_confidence")
-  plateSamples             Int                    @default(0) @map("plate_samples")
-  matchStatus              ReservationMatchStatus @default(INSUFFICIENT) @map("match_status")
-  matchReason              String                 @default("legacy_observation") @map("match_reason")
-  reservationId            String?                @map("matched_reservation_id") @db.Uuid
-  expectedPlate            String?                @map("expected_plate")
-
-  spot ParkingSpot @relation(fields: [spotId], references: [id], onDelete: Cascade)
-
-  @@index([cameraId, observedAt])
-  @@index([spotId, observedAt])
-  @@index([matchStatus, observedAt])
-  @@map("camera_observations")
-}
-
-model VisionAlert {
-  id               String            @id @default(uuid()) @db.Uuid
-  activeKey        String?           @unique @map("active_key")
-  type             VisionAlertType
-  status           VisionAlertStatus @default(OPEN)
-  cameraId         String            @map("camera_id")
-  spotId           String            @map("spot_id") @db.Uuid
-  expectedSpotId   String?           @map("expected_spot_id") @db.Uuid
-  expectedSpotCode String?           @map("expected_spot_code")
-  plateNormalized  String            @map("plate_normalized")
-  expectedPlate    String?           @map("expected_plate")
-  reservationId    String?           @map("reservation_id") @db.Uuid
-  observationId    String            @map("observation_id") @db.Uuid
-  firstSeenAt      DateTime          @map("first_seen_at")
-  lastSeenAt       DateTime          @map("last_seen_at")
-  occurrences      Int               @default(1)
-  acknowledgedAt   DateTime?         @map("acknowledged_at")
-  acknowledgedBy   String?           @map("acknowledged_by") @db.Uuid
-  resolvedAt       DateTime?         @map("resolved_at")
-  createdAt        DateTime          @default(now()) @map("created_at")
-  spot             ParkingSpot       @relation(fields: [spotId], references: [id], onDelete: Cascade)
-
-  @@index([cameraId, spotId, lastSeenAt])
-  @@index([status, lastSeenAt])
-  @@map("vision_alerts")
-}
-
 model Reservation {
-  id          String            @id @default(uuid()) @db.Uuid
-  userId      String            @map("user_id") @db.Uuid
-  vehicleId   String            @map("vehicle_id") @db.Uuid
-  spotId      String            @map("spot_id") @db.Uuid
-  status      ReservationStatus @default(CONFIRMED)
-  startsAt    DateTime          @map("starts_at")
-  expiresAt   DateTime          @map("expires_at")
-  cancelledAt DateTime?         @map("cancelled_at")
-  checkedInAt DateTime?         @map("checked_in_at")
-  completedAt DateTime?         @map("completed_at")
-  createdAt   DateTime          @default(now()) @map("created_at")
-  updatedAt   DateTime          @updatedAt @map("updated_at")
+  id            String            @id @default(uuid()) @db.Uuid
+  userId        String            @map("user_id") @db.Uuid
+  vehicleId     String            @map("vehicle_id") @db.Uuid
+  lotId         String            @map("lot_id") @db.Uuid
+  status        ReservationStatus @default(CONFIRMED)
+  paymentStatus PaymentStatus     @default(NOT_REQUIRED) @map("payment_status")
+  startsAt      DateTime          @map("starts_at")
+  expiresAt     DateTime          @map("expires_at")
+  cancelledAt   DateTime?         @map("cancelled_at")
+  checkedInAt   DateTime?         @map("checked_in_at")
+  completedAt   DateTime?         @map("completed_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
 
   user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   vehicle Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  spot    ParkingSpot     @relation(fields: [spotId], references: [id], onDelete: Restrict)
+  lot     ParkingLot      @relation(fields: [lotId], references: [id], onDelete: Restrict)
   session ParkingSession?
 
   @@index([userId])
   @@index([vehicleId])
-  @@index([spotId])
+  @@index([lotId])
   @@index([status])
   @@map("reservations")
 }
@@ -251,7 +153,7 @@ model ParkingSession {
   id            String        @id @default(uuid()) @db.Uuid
   userId        String        @map("user_id") @db.Uuid
   vehicleId     String        @map("vehicle_id") @db.Uuid
-  spotId        String        @map("spot_id") @db.Uuid
+  lotId         String        @map("lot_id") @db.Uuid
   reservationId String?       @unique @map("reservation_id") @db.Uuid
   status        SessionStatus @default(ACTIVE)
   checkedInAt   DateTime      @default(now()) @map("checked_in_at")
@@ -262,14 +164,58 @@ model ParkingSession {
 
   user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
   vehicle     Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  spot        ParkingSpot  @relation(fields: [spotId], references: [id], onDelete: Restrict)
+  lot         ParkingLot   @relation(fields: [lotId], references: [id], onDelete: Restrict)
   reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([vehicleId])
-  @@index([spotId])
+  @@index([lotId])
   @@index([status])
   @@map("parking_sessions")
+}
+
+model GateEvent {
+  id              String          @id @default(uuid()) @db.Uuid
+  gateId          String          @map("gate_id")
+  lotId           String?         @map("lot_id") @db.Uuid
+  direction       GateDirection
+  source          GateEventSource @default(CAMERA)
+  decision        GateDecision
+  barrierAction   BarrierAction   @map("barrier_action")
+  reason          String
+  plateRaw        String?         @map("plate_raw")
+  plateNormalized String?         @map("plate_normalized")
+  ocrConfidence   Float?          @map("ocr_confidence")
+  plateSamples    Int             @default(0) @map("plate_samples")
+  reservationId   String?         @map("reservation_id") @db.Uuid
+  sessionId       String?         @map("session_id") @db.Uuid
+  actorId         String?         @map("actor_id") @db.Uuid
+  metadata        Json?
+  occurredAt      DateTime        @default(now()) @map("occurred_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  lot ParkingLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+
+  @@index([gateId, occurredAt])
+  @@index([plateNormalized, occurredAt])
+  @@index([decision, occurredAt])
+  @@map("gate_events")
+}
+
+model GateCommand {
+  id          String            @id @default(uuid()) @db.Uuid
+  gateId      String            @map("gate_id")
+  lotId       String?           @map("lot_id") @db.Uuid
+  command     String            @default("OPEN")
+  durationMs  Int               @default(5000) @map("duration_ms")
+  status      GateCommandStatus @default(PENDING)
+  requestedBy String?           @map("requested_by") @db.Uuid
+  expiresAt   DateTime          @map("expires_at")
+  executedAt  DateTime?         @map("executed_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  @@index([gateId, status, expiresAt])
+  @@map("gate_commands")
 }
 
 model AuditLog {

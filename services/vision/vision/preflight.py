@@ -1,4 +1,6 @@
-"""Read-only diagnostics; a frame-read check is not an AI accuracy measurement."""
+"""Read-only hardware diagnostics for USB camera and Arduino Uno R3 COM ports."""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -7,23 +9,35 @@ import platform
 import sys
 from pathlib import Path
 
-from .config import load_rois, load_settings
+from .arduino_gate import list_serial_ports, select_arduino_port
+from .config import load_gate_settings
 from .source import open_video_source
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--settings", default="config/vision.json")
+    parser.add_argument("--settings", default="config/gate.json")
     parser.add_argument("--read-frame", action="store_true")
     parser.add_argument("--output")
     args = parser.parse_args()
-    report = {
+
+    ports = list_serial_ports()
+    report: dict[str, object] = {
         "python": platform.python_version(),
         "keyConfigured": bool(os.environ.get("VISION_API_KEY")),
-        "physicalRecognitionVerified": False,
         "cameraCheck": "NOT_REQUESTED",
         "cameras": [],
+        "serialPorts": [
+            {
+                "device": item.device,
+                "description": item.description,
+                "hwid": item.hwid,
+            }
+            for item in ports
+        ],
+        "selectedArduinoPort": select_arduino_port("auto", ports),
     }
+
     private_source = None
     try:
         import cv2
@@ -35,19 +49,24 @@ def main():
                 {"index": item.index, "name": item.name}
                 for item in enumerate_cameras(cv2.CAP_DSHOW)
             ]
-        settings = load_settings(args.settings)
+
+        settings = load_gate_settings(args.settings)
         private_source = settings.source if isinstance(settings.source, str) else None
-        camera_id, rois = load_rois(settings.roi_config)
         report["configuration"] = {
-            "cameraId": camera_id,
+            "gateId": settings.gate_id,
+            "lotId": settings.lot_id,
             "cameraName": settings.camera_name,
-            "source": settings.source
-            if isinstance(settings.source, int)
-            else "REDACTED_STREAM_OR_MEDIA_PATH",
+            "source": (
+                settings.source
+                if isinstance(settings.source, int)
+                else "REDACTED_STREAM_OR_MEDIA_PATH"
+            ),
             "backend": settings.video_backend,
-            "spots": [item.code for item in rois],
-            "ocrEnabled": settings.plate_config is not None,
+            "plateMode": settings.plate_mode,
+            "arduinoEnabled": settings.arduino.enabled,
+            "arduinoPort": settings.arduino.port,
         }
+
         if args.read_frame:
             capture = open_video_source(
                 settings.source,
@@ -70,6 +89,7 @@ def main():
             else str(error)
         )
         report["cameraCheck"] = "UNAVAILABLE" if args.read_frame else "NOT_REQUESTED"
+
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
